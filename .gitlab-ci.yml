@@ -1,0 +1,4 @@
+test-all:
+  stage: test
+  script:
+    - echo "Run all tests"
