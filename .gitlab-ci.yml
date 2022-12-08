@@ -1,4 +1,8 @@
-test-all:
+job_test:
   stage: test
-  script:
-    - echo "Run all tests"
+  script: "whoami"
+
+job_test2:
+  stage: test
+  script: echo "hi, $GITLAB_USER_LOGIN!"
+
