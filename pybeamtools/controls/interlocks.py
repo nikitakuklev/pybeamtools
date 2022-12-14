@@ -3,7 +3,7 @@ import logging
 import time
 import uuid
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Optional
 
 import pandas as pd
 from pydantic import BaseModel, ValidationError, Field, validator, root_validator, NonNegativeInt, NonNegativeFloat
@@ -87,7 +87,7 @@ class Interlock(ABC):
 
 
 class LimitInterlockOptions(InterlockOptions):
-    limits: dict[str, tuple[float, float]]
+    limits: dict[str, tuple[Optional[float], Optional[float]]]
     block_all_writes: bool = False
 
     @validator('limits')
@@ -96,7 +96,8 @@ class LimitInterlockOptions(InterlockOptions):
             assert len(v) > 0
             for tpl in v.values():
                 assert len(tpl) == 2
-                assert tpl[0] <= tpl[1]
+                if tpl[0] is not None and tpl[1] is not None:
+                    assert tpl[0] <= tpl[1]
             return v
 
 
@@ -144,14 +145,16 @@ class LimitInterlock(Interlock):
                     if bounds is not None:
                         low = bounds[0]
                         high = bounds[1]
-                        if low <= value <= high:
-                            continue
-                        else:
-                            raise InterlockInternalError(f'PV ({pv_name}) at ({value}), outside ({low}|{high})')
+                        if high is not None and value > high:
+                            raise InterlockInternalError(f'PV ({pv_name}) change to ({value}), outside ({low}|{high})')
+                        if low is not None and value < low:
+                            raise InterlockInternalError(f'PV ({pv_name}) change to ({value}), outside ({low}|{high})')
                 else:
                     raise Exception(f'PV ({pv_name}) encountered that was not declared')
         except Exception as ex:
-            return {'result': False, 'ex': ex, 'reason': 'ex'}
+            if not isinstance(ex, InterlockInternalError):
+                self.logger.error(f'Unexpected exception ({ex})')
+            raise {'result': False, 'ex': ex, 'reason': 'ex'}
         return {'result': True, 'ex': None, 'reason': None}
 
 

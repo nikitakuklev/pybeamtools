@@ -162,8 +162,9 @@ class Oscillator(VirtualDevice):
 class RealisticMagnet(VirtualDevice):
     def __init__(self, name: str, value=0.0, low=None, high=None, noise=None, resolution=None,
                  measurement_period=None,
-                 model='exponential', model_kwargs=None) -> None:
-        assert high > low
+                 model='instant', model_kwargs=None) -> None:
+        if high is not None and low is not None:
+            assert high > low
         assert noise is None or noise >= 0.0
         assert resolution is None or resolution > 0.0
         super().__init__(name)

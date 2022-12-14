@@ -1,6 +1,7 @@
 import collections
 import json
 import logging
+import time
 import uuid
 from abc import abstractmethod
 from enum import Enum
@@ -21,6 +22,10 @@ class PVAccess(Enum):
     #    WRITE = 2
     READWRITE = 3
 
+class WriteResponse:
+    def __init__(self, ts, data):
+        self.timestamp = ts
+        self.data = data
 
 class PVOptions(BaseModel):
     name: str
@@ -96,7 +101,7 @@ class EPICSPV(PV):
         if self.options.security != PVAccess.READWRITE:
             raise SecurityError(f'Writes on PV {self.name} are forbidden')
         # Propose a write - any issues will raise an Exception
-        self.cm.acc.propose_write(self.name, data)
+        self.cm.acc.propose_writes(self.name, data)
         # Perform write
         return self.caproto.write(data, wait=wait, callback=callback,
                                   timeout=self.options.write_timeout if timeout is None else timeout,
@@ -115,14 +120,21 @@ class SimPV(PV):
         return self.cm.sim.read_channel(self.name)
 
     def write(self, data, *, wait=True, callback=None,
-              timeout=None, notify=None, data_type=None, data_count=None):
+              timeout=None, notify=None, data_type=None, data_count=None) -> WriteResponse:
+        if not isinstance(data, (int, float, str)):
+            raise InvalidWriteError(f'Data {data} is not of valid type')
         # Check access
         if self.options.security != PVAccess.READWRITE:
             raise SecurityError(f'Write on PV ({self.name}) forbidden by access mask')
         # Propose a write - any issues will raise an Exception
-        self.cm.acc.propose_write([self.name], [data])
+        self.cm.acc.propose_writes([self.name], [data])
         # Perform write
-        return self.cm.sim.write_channel(self.name, data)
+        self.cm.sim.write_channel(self.name, data)
+        return WriteResponse(ts=time.time(), data=None)
+
+
+
+
 
 
 class ConnectionManager:
@@ -177,6 +189,7 @@ class SimConnectionManager(ConnectionManager):
             self.circular_buffers_map[pv_name] = collections.deque(maxlen=50)
             self.callbacks_map[pv_name] = []
             self.pv_map[pv_name] = pv
+            self.last_results_map[pv_name] = None
             if pv.options.monitor:
                 self.subscribe_monitor(pv)
 
@@ -190,6 +203,7 @@ class SimConnectionManager(ConnectionManager):
             self.circular_buffers_map[pv_name] = collections.deque(maxlen=50)
             self.callbacks_map[pv_name] = []
             self.pv_map[pv_name] = pv
+            self.last_results_map[pv_name] = None
             if pv.options.monitor:
                 self.subscribe_monitor(pv)
 

@@ -13,16 +13,18 @@ from .interlocks import Interlock
 from ..utils.logging import setup_worker_logging, LogManager
 
 
-
 def interlock_worker_loop(log_queue: multiprocessing.Queue,
                           queue_out: multiprocessing.Queue,
                           queue_in: multiprocessing.Queue,
                           i: Interlock):
     setup_worker_logging(q=log_queue)
     logger = logging.getLogger(__name__)
-    try:
-        while True:
+
+    while True:
+        try:
             msg: RPCMessage = queue_out.get()
+            if msg is None:
+                return
             assert isinstance(msg, RPCMessage)
             logger.info(f'RPC message {msg.mode=} received on PID {os.getpid()}')
             if msg.mode == 'read':
@@ -38,12 +40,12 @@ def interlock_worker_loop(log_queue: multiprocessing.Queue,
                                mode='response',
                                data=response)
             queue_in.put(resp)
-    except Exception as ex:
-        tb = traceback.format_exc()
-        we = WrappedException()
-        we.ex = ex
-        we.tb = tb
-        queue_in.put(we)
+        except Exception as ex:
+            tb = traceback.format_exc()
+            we = WrappedException()
+            we.ex = ex
+            we.tb = tb
+            queue_in.put(we)
 
 
 class RPCMessage:
@@ -86,7 +88,7 @@ class ProcessManager:
                 v[0].terminate()
         else:
             self.logger.debug(f'Terminating worker process_read {pid}')
-            p: Process = self.queue_map[pid]
+            p, queue_out, queue_in, interlock = self.queue_map[pid]
             p.terminate()
 
     def start_interlock(self, interlock: Interlock):
@@ -100,6 +102,12 @@ class ProcessManager:
         self.id_map[interlock.uuid] = p.pid
         self.counter += 1
 
+    def stop_interlock(self, interlock: Interlock):
+        pid = self.id_map[interlock.uuid]
+        self.stop_worker(pid)
+        #p, queue_out, queue_in, interlock = self.queue_map[pid]
+        #ueue_out.put(None)
+
     def poll(self, interlocks_list: list[Interlock],
              data_list: list, timeout: float = 1.0) -> list[tuple[int, RPCResponse]]:
         for i in interlocks_list:
@@ -108,7 +116,7 @@ class ProcessManager:
             if self.id_map[i.uuid] not in self.queue_map:
                 raise KeyError(f'Interlock internal failure')
             if self.queue_map[self.id_map[i.uuid]][0].exitcode is not None:
-                raise ControlLibException(f'Interlock process_read terminated unexpectedly')
+                raise ControlLibException(f'Interlock process_read terminated unexpectedly with code ({self.queue_map[self.id_map[i.uuid]][0].exitcode})')
 
         for i, v in zip(interlocks_list, data_list):
             pid = self.id_map[i.uuid]
@@ -131,13 +139,16 @@ class ProcessManager:
                 self.logger.debug(f'Received response (id {response.counter}) from interlock ({i.uuid})')
             elif isinstance(response, Exception):
                 responses.append((i.uuid, response))
-                self.logger.debug(f'Received exception from interlock ({i.uuid})')
+                if isinstance(response, WrappedException):
+                    self.logger.debug(f'Internal failure in interlock ({i.uuid})')
+                else:
+                    self.logger.debug(f'Received exception from interlock ({i.uuid})')
             else:
                 raise ControlLibException(f'Response ({type(response)}) not recognized')
         for (uuid, response) in responses:
             if isinstance(response, RPCResponse):
                 assert response.counter == self.last_message_id[response.uuid]
-                #assert response.uuid == i.uuid
+                # assert response.uuid == i.uuid
 
         return responses
 

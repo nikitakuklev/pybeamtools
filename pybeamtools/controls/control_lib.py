@@ -149,7 +149,10 @@ class Accelerator:
         # df = pd.DataFrame(index=self.knobs.keys(), data=self.knobs.values())
         return self.df
 
-    def propose_write(self, pvs_name: list[str], pvs_data: list):
+    def propose_writes(self, pvs_name: list[str], pvs_data: list):
+        """
+        Propose a set of writes to be performed in parallel
+        """
         for pv_name, data in zip(pvs_name, pvs_data):
             assert pv_name in self.cm.pv_map
             pv = self.cm.pv_map[pv_name]
@@ -192,12 +195,15 @@ class Accelerator:
             if isinstance(r, Exception):
                 failed_ex = True
                 if isinstance(r, WrappedException):
-                    self.logger.warning(f'Interlock ({uuid}) raised exception {r.ex}')
+                    self.logger.warning(f'Interlock ({uuid}) raised exception ({r.ex})')
                     self.logger.error(f'{r.tb}')
                 elif isinstance(r, queue.Empty):
                     self.logger.error(f'Interlock ({uuid}) did not respond in time')
                 else:
                     self.logger.error(f'Interlock ({uuid}) exception', exc_info=r)
+            # elif r.ex is not None:
+            #     self.logger.error(f'Interlock ({r.uuid}) unexpected internal failure ({r.data})')
+            #     failed_ex = True
             else:
                 if not r.data['result']:
                     self.logger.error(f'Interlock ({r.uuid}) rejected proposed write - result was ({r.data})')
@@ -207,7 +213,7 @@ class Accelerator:
             raise InterlockWriteError(
                 f'Write on ({pvs_name}) of ({pvs_data}) failed due to exceptions raised by interlocks')
         if failed_result:
-            raise InterlockWriteError(f'Write on ({pvs_name}) of ({pvs_data}) failed due to interlock rejection')
+            raise InterlockWriteError(f'Write on ({pvs_name}) of ({pvs_data}) failed due to interlock')
 
     def add_interlock(self, interlock: Interlock):
         for pv_name in interlock.options.pv_list:
@@ -221,7 +227,7 @@ class Accelerator:
         self.logger.info(f'Interlock ({interlock.uuid}) with PV list ({interlock.options.pv_list}) added')
 
     def remove_interlock(self, interlock: Interlock):
-
+        pass
 
     def read_fresh(self, pvs_read, timeout=1.0, now=None, min_readings=1, max_readings=None,
                    reduce='mean', include_timestamps=False, use_buffer=True):

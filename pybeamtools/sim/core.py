@@ -2,13 +2,17 @@ import logging
 import queue
 import threading
 import time
-from typing import Callable, Any, Union
+from typing import Callable, Any, Union, Optional
 
 import numpy as np
 
 from .devices import VirtualDevice
 
 TRACE=False
+
+
+class SimException(Exception):
+    pass
 
 class Subscription:
     def __init__(self, device: VirtualDevice, engine):
@@ -29,7 +33,6 @@ class Subscription:
 
 class Metadata:
     pass
-
 
 class Measurement:
     def __init__(self, data: np.ndarray, timestamp: float):
@@ -108,42 +111,45 @@ class SimulationEngine:
         self.channels: list[str] = []
         self.subscriptions: dict[str, Subscription] = {}
         self.channel_subs: dict[str, ChannelSubscription] = {}
-        self.periods = {}
+        self.periods: dict[str, float] = {}
         self.times = []
         self.next_periodic_read_time: dict[str, float] = {}
         self.maps: list[ChannelMapper] = []
         self.channel_to_mapper: dict[str, ChannelMapper] = {}
         self.device_channels: dict[str, list[str]] = {}
         self.logger = logging.getLogger(self.__class__.__qualname__)
-        self.is_running = False
+        self.is_running: bool = False
         self.cmdq = None
-        self.poll_thread = None
+        self.poll_thread: Optional[threading.Thread] = None
         self.TRACE = False
 
     def add_device(self, device: VirtualDevice, period: float):
-        assert not self.is_running
+        if self.is_running:
+            raise SimException(f'Simulation is running and cannot be modified')
         if device.name in self.devices:
-            raise ValueError(f'Device {device.name} is already added')
+            raise SimException(f'Device ({device.name}) is already added')
         self.devices[device.name] = device
+        self.device_channels[device.name] = []
         self.periods[device.name] = period
-        self.logger.debug(f'Added device {device.name} with update period of {period}')
+        self.logger.debug(f'Added device ({device.name}) with update period of ({period})')
 
     def add_mapper(self, mapper: ChannelMapper):
+        assert isinstance(mapper, ChannelMapper)
         device_names = mapper.required_devices()
         for dn in device_names:
             assert dn in self.devices
         outputs = mapper.available_channels()
         for dn in device_names:
-            if dn not in self.device_channels:
-                self.device_channels[dn] = []
+            # if dn not in self.device_channels:
+            #     self.device_channels[dn] = []
             self.device_channels[dn] += outputs
         for out in outputs:
             self.channel_to_mapper[out] = mapper
         self.channels.extend(outputs)
         self.maps.append(mapper)
-        self.logger.debug(f'Added mapper for outputs {outputs} from devices {device_names}')
+        self.logger.debug(f'Added mapper for outputs ({outputs}) from devices ({device_names})')
 
-    def subscribe(self, device_name: str) -> Subscription:
+    def subscribe_device(self, device_name: str) -> Subscription:
         assert device_name in self.devices
         if device_name not in self.subscriptions:
             self.logger.debug(f'Created subscription for device {device_name}')
@@ -152,9 +158,9 @@ class SimulationEngine:
         return self.subscriptions[device_name]
 
     def subscribe_channel(self, channel_name: str) -> ChannelSubscription:
-        assert channel_name in self.channels, f'Channel {channel_name} not found'
+        assert channel_name in self.channels, f'Channel ({channel_name}) not found'
         if channel_name not in self.channel_subs:
-            self.logger.debug(f'Created subscription for channel {channel_name}')
+            self.logger.debug(f'Created subscription for channel ({channel_name})')
             self.channel_subs[channel_name] = ChannelSubscription(channel=channel_name,
                                                                   engine=self)
         return self.channel_subs[channel_name]
@@ -164,6 +170,9 @@ class SimulationEngine:
         self.next_periodic_read_time = {k: now for k in self.next_periodic_read_time}
 
     def start_update_thread(self):
+        if self.is_running:
+            raise SimException(f'Polling thread is already running')
+
         def _poll(cmdq: queue.Queue):
             self.logger.debug(f'Hello from simulation poll thread (id {threading.get_ident()})')
             t = time.time()
@@ -174,7 +183,9 @@ class SimulationEngine:
                 for dev in self.devices:
                     now = time.time()
                     if self.next_periodic_read_time[dev] < now:
+                        t1 = time.perf_counter()
                         val = self.devices[dev].read()
+                        t2 = time.perf_counter()
                         self.next_periodic_read_time[dev] += self.periods[dev]
                         if self.TRACE:
                             self.logger.debug(f'New value {val} for device ({dev}), next in (+{self.periods[dev]})s')
@@ -188,6 +199,10 @@ class SimulationEngine:
                             if channel in self.channel_subs:
                                 channel_value = self.channel_to_mapper[channel].process_read(channel)
                                 self.channel_subs[channel].process_update(channel_value)
+                        t3 = time.perf_counter()
+                        if t3-t1 > 0.5*self.periods[dev]:
+                            logging.warning(f'Device {dev} took ({t3-t1:.4f})s for update, more than half of period')
+
                 try:
                     cmd = cmdq.get(timeout=0.01)
                     if cmd is None:
@@ -207,7 +222,8 @@ class SimulationEngine:
         self.poll_thread = th
 
     def stop_update_thread(self):
-        assert self.is_running
+        if not self.is_running:
+            raise SimException(f'No thread to stop')
         self.cmdq.put(None)
         self.poll_thread.join(timeout=1.0)
 
@@ -217,13 +233,13 @@ class SimulationEngine:
 
     def read_device(self, device_name: str):
         assert device_name in self.devices
-        self.logger.debug(f'Reading device {device_name}')
+        self.logger.debug(f'Reading device ({device_name})')
         value = self.devices[device_name].read()
         return value
 
     def read_channel(self, channel_name: str):
         assert channel_name in self.channels
-        self.logger.debug(f'Reading channel {channel_name}')
+        self.logger.debug(f'Reading channel ({channel_name})')
         value = self.channel_to_mapper[channel_name].process_read(channel_name)
         return value
 
@@ -232,5 +248,5 @@ class SimulationEngine:
 
     def write_channel(self, channel_name: str, value: Any):
         assert channel_name in self.channels
-        self.logger.debug(f'Writing channel {channel_name}')
+        self.logger.debug(f'Writing ({value}) to channel ({channel_name})')
         self.channel_to_mapper[channel_name].process_write(channel_name, value)

@@ -314,32 +314,35 @@ class CallableModel(BaseModel):
 
 class PBClass:
     """ Inheriting from this class allows storing attributes
-    in the model configured with __options__model__. All other attributes
+    in the model configured with __options_model__. All other attributes
     will be stored in the class as usual. """
 
     ___options_model__: BaseModel = None
 
     def __init__(self, options=None, **kwargs):
-        print(f'__init__ {options=} {kwargs}')
+        print(f'__init__ {options=} {kwargs=}')
+        assert isinstance(options, BaseModel)
         if options is None:
             self.__set_options(**kwargs)
         else:
-            super(PBClass, self).__setattr__(self, 'options', options)
+            object.__setattr__(self, 'options', options)
 
     # Called first, need to be careful to avoid recursion
     def __getattribute__(self, item):
-        print(f'__getattribute__ {item}')
+        print(f'__getattribute__ {item=}')
         try:
-            opt = super(PBClass, self).__getattribute__(self, 'options')
-            if hasattr(opt, item):
-                return super(PBClass, self).__getattribute__(opt, item)
+            opt = super(PBClass, self).__getattribute__('options')
+            if item in opt.__fields__:
+            #if hasattr(opt, item):
+                # Options model can get accessed as usual
+                return getattr(opt, item)#super(PBClass, self).__getattribute__(opt, item)
         except AttributeError:
             pass
         except Exception as ex:
-            print(f'__getattribute__ exception')
+            print(f'__getattribute__ produced exception {ex=}')
             raise ex
         finally:
-            return super(PBClass, self).__getattribute__(self, item)
+            return super(PBClass, self).__getattribute__(item)
 
     def __setattr__(self, item, value):
         # Can also access __dict__ directly
@@ -379,3 +382,6 @@ class PBClass:
 
         self.options = options_class.parse_obj(opt_kwargs)
         return extra_kwargs
+
+    def serialize(self):
+        pass
