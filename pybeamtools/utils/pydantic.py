@@ -59,6 +59,9 @@ def to_sdds(options: dict):
             elif isinstance(v, (int, float, str)):
                 full_name = _escape_sdds_string(root + k)
                 parameters.append((full_name, str(v)))
+            elif v is None:
+                full_name = _escape_sdds_string(root + k)
+                parameters.append((full_name, 'None'))
             else:
                 raise ValueError(f'Unknown mapping {k=} {v=} {type(v)=}')
     _to_sdds_inner(prefix, options)

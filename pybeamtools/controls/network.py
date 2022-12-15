@@ -5,7 +5,7 @@ import time
 import uuid
 from abc import abstractmethod
 from enum import Enum
-from typing import Callable, Union, Optional, Any
+from typing import Callable, Union, Optional, Any, Literal
 
 import caproto
 import caproto.threading.client
@@ -134,11 +134,13 @@ class SimPV(PV):
 
 
 
-
+class ConnectionOptions(BaseModel):
+    network: Literal['epics', 'dummy'] = 'dummy'
+    pvs: list[PVOptions] = []
 
 
 class ConnectionManager:
-    def __init__(self, acc):
+    def __init__(self, acc, options: ConnectionOptions):
         self.acc = acc
         self.pv_map: dict[str, PV] = {}
         self.circular_buffers_map: dict[str, collections.deque] = {}
@@ -146,6 +148,7 @@ class ConnectionManager:
         self.callbacks_map: dict[str, list[Callable]] = {}
         self.subscribed_pv_names: list[str] = []
         self.logger = logging.getLogger(self.__class__.__name__)
+        self.options = options
 
     def __getitem__(self, pv_names):
         return self.get_pvs(pv_names)
@@ -162,10 +165,13 @@ class ConnectionManager:
     def get_pvs(self, pv_names: list[str]) -> list[PV]:
         pass
 
+    def dump_model(self):
+        opts = self.options
+
 
 class SimConnectionManager(ConnectionManager):
-    def __init__(self, acc, ctx: SimulationEngine) -> None:
-        super().__init__(acc)
+    def __init__(self, acc, options, ctx: SimulationEngine) -> None:
+        super().__init__(acc, options)
         self.logger.info('Creating dummy connection manager')
         assert ctx.is_running
         self.sim = ctx
@@ -192,8 +198,10 @@ class SimConnectionManager(ConnectionManager):
             self.last_results_map[pv_name] = None
             if pv.options.monitor:
                 self.subscribe_monitor(pv)
+            self.options.pvs.append(pv.options)
 
     def add_pvs_objects(self, pvs: list[SimPV]):
+        assert all(isinstance(pv, SimPV) for pv in pvs), f'Only SimPVs can be added'
         self.logger.debug(f'Adding {len(pvs)} PV objects')
         pv_names = [pv.name for pv in pvs]
         for i in range(len(pv_names)):
@@ -206,6 +214,7 @@ class SimConnectionManager(ConnectionManager):
             self.last_results_map[pv_name] = None
             if pv.options.monitor:
                 self.subscribe_monitor(pv)
+            self.options.pvs.append(pv.options)
 
     def get_pvs(self, pv_names: list[str]) -> list[PV]:
         for pv_name in pv_names:
@@ -233,10 +242,11 @@ class SimConnectionManager(ConnectionManager):
 
 
 class EPICSConnectionManager(ConnectionManager):
-    def __init__(self, acc, ctx=None) -> None:
+    def __init__(self, acc, options, ctx=None) -> None:
         super().__init__(acc)
         self.logger.info('Creating EPICS connection manager')
         if ctx is None:
+            self.logger.info('Context not provided, creating new caproto context')
             from caproto.threading.client import Context
             ctx = Context()
         self.ctx = ctx
@@ -260,6 +270,7 @@ class EPICSConnectionManager(ConnectionManager):
 
     def add_pvs_objects(self, pvs):
         self.logger.debug(f'Adding {len(pvs)} PV objects')
+        assert all(isinstance(pv, EPICSPV) for pv in pvs), f'Only EPICSPVs can be added'
         pv_names = [pv.name for pv in pvs]
         pvs_caproto = self.ctx.get_pvs(*pv_names, priority=1)
         for i in range(len(pv_names)):
@@ -270,6 +281,7 @@ class EPICSConnectionManager(ConnectionManager):
             self.circular_buffers_map[pv_name] = collections.deque(maxlen=50)
             self.callbacks_map[pv_name] = []
             self.pv_map[pv_name] = pv
+            self.last_results_map[pv_name] = None
             if pv.options.monitor:
                 self.subscribe_monitor(pv)
 
@@ -337,3 +349,8 @@ class EPICSConnectionManager(ConnectionManager):
         else:
             # print(f'PV {name}: buffer had {idx} readings past {start} ({[]})')
             return []
+
+    def start_epics_repeater(self):
+        self.logger.info('Spawning repeater')
+        from caproto.sync import repeater
+        repeater.spawn_repeater()

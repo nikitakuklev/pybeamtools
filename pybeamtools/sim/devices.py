@@ -159,6 +159,32 @@ class Oscillator(VirtualDevice):
         self.time_last_update = now
 
 
+class UNIXTimer(VirtualDevice):
+    def __init__(self, name: str):
+        self.time_start = time.time()
+        self.time_last_update = self.time_start
+        super().__init__(name)
+
+    def read(self) -> float:
+        self._update_value()
+        raw_read = self.raw_value
+        return raw_read
+
+    def read_exact(self) -> float:
+        self._update_value()
+        return self.raw_value
+
+    def write(self, value) -> bool:
+        raise NotImplementedError('Oscillator is a read-only device')
+
+    def update(self):
+        pass
+
+    def _update_value(self):
+        self.raw_value = self.time_last_update = time.time() - self.time_start
+
+
+
 class RealisticMagnet(VirtualDevice):
     def __init__(self, name: str, value=0.0, low=None, high=None, noise=None, resolution=None,
                  measurement_period=None,

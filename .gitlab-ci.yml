@@ -1,8 +1,5 @@
 job_test:
   stage: test
   script: "whoami"
-
-job_test2:
-  stage: test
-  script: echo "hi, $GITLAB_USER_LOGIN!"
+  
 

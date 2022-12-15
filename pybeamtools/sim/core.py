@@ -1,5 +1,6 @@
 import logging
 import queue
+import sys
 import threading
 import time
 from typing import Callable, Any, Union, Optional
@@ -8,11 +9,12 @@ import numpy as np
 
 from .devices import VirtualDevice
 
-TRACE=False
+TRACE = False
 
 
 class SimException(Exception):
     pass
+
 
 class Subscription:
     def __init__(self, device: VirtualDevice, engine):
@@ -33,6 +35,7 @@ class Subscription:
 
 class Metadata:
     pass
+
 
 class Measurement:
     def __init__(self, data: np.ndarray, timestamp: float):
@@ -59,7 +62,11 @@ class ChannelSubscription:
         if self.engine.TRACE:
             self.logger.debug(f'Running ({len(self.callbacks)}) callbacks for channel ({self.name})')
         for cb in self.callbacks:
-            cb(self, value)
+            try:
+                cb(self, value)
+            except Exception as ex:
+                self.logger.error(f'Callback {cb} on {self.channel} resulted in exception {ex}',
+                                  exc_info=sys.exc_info())
 
 
 class SimulationError(Exception):
@@ -96,6 +103,17 @@ class ChannelMapper:
 
     def available_channels(self):
         return list(set([c.output for c in self.channel_maps]))
+
+    def devices_to_channels(self) -> dict[str, list[str]]:
+        data = {}
+        for c in self.channel_maps:
+            if c.device.name not in data:
+                data[c.device.name] = []
+            data[c.device.name] += [c.output]
+        for k, v in data.items():
+            data[k] = list(set(v))
+        #print(f'{data=}')
+        return data
 
     def process_read(self, output_name: str) -> Union[str, int, float]:
         return self.output_to_map[output_name].process_read()
@@ -139,10 +157,13 @@ class SimulationEngine:
         for dn in device_names:
             assert dn in self.devices
         outputs = mapper.available_channels()
-        for dn in device_names:
-            # if dn not in self.device_channels:
-            #     self.device_channels[dn] = []
-            self.device_channels[dn] += outputs
+        devices_to_channels = mapper.devices_to_channels()
+        for k, v in devices_to_channels.items():
+            self.device_channels[k] += v
+        # for dn in device_names:
+        #     # if dn not in self.device_channels:
+        #     #     self.device_channels[dn] = []
+        #     self.device_channels[dn] += outputs
         for out in outputs:
             self.channel_to_mapper[out] = mapper
         self.channels.extend(outputs)
@@ -176,33 +197,40 @@ class SimulationEngine:
         def _poll(cmdq: queue.Queue):
             self.logger.debug(f'Hello from simulation poll thread (id {threading.get_ident()})')
             t = time.time()
-            #times = {k: t for k in self.devices}
+            # times = {k: t for k in self.devices}
             self.next_periodic_read_time = {k: t for k in self.devices}
             while True:
                 # self.logger.debug(f'Poll loop running at {now=}')
                 for dev in self.devices:
-                    now = time.time()
-                    if self.next_periodic_read_time[dev] < now:
-                        t1 = time.perf_counter()
-                        val = self.devices[dev].read()
-                        t2 = time.perf_counter()
-                        self.next_periodic_read_time[dev] += self.periods[dev]
-                        if self.TRACE:
-                            self.logger.debug(f'New value {val} for device ({dev}), next in (+{self.periods[dev]})s')
+                    try:
+                        now = time.time()
+                        if self.next_periodic_read_time[dev] < now:
+                            t1 = time.perf_counter()
+                            val = self.devices[dev].read()
+                            t2 = time.perf_counter()
+                            self.next_periodic_read_time[dev] += self.periods[dev]
+                            if self.TRACE:
+                                self.logger.debug(
+                                    f'New value {val} for device ({dev}), next in (+{self.periods[dev]})s')
 
-                        # Trigger devices
-                        if dev in self.subscriptions:
-                            self.subscriptions[dev].process_update(val)
+                            # Trigger devices
+                            if dev in self.subscriptions:
+                                self.subscriptions[dev].process_update(val)
 
-                        # Trigger channels
-                        for channel in self.device_channels[dev]:
-                            if channel in self.channel_subs:
-                                channel_value = self.channel_to_mapper[channel].process_read(channel)
-                                self.channel_subs[channel].process_update(channel_value)
-                        t3 = time.perf_counter()
-                        if t3-t1 > 0.5*self.periods[dev]:
-                            logging.warning(f'Device {dev} took ({t3-t1:.4f})s for update, more than half of period')
-
+                            # Trigger channels
+                            for channel in self.device_channels[dev]:
+                                if channel in self.channel_subs:
+                                    channel_value = self.channel_to_mapper[channel].process_read(channel)
+                                    if self.TRACE:
+                                        self.logger.debug(
+                                            f'Requesting subs processing of {channel=} for {channel_value=}')
+                                    self.channel_subs[channel].process_update(channel_value)
+                            t3 = time.perf_counter()
+                            if t3 - t1 > 0.5 * self.periods[dev]:
+                                logging.warning(
+                                    f'Device {dev} took ({t3 - t1:.4f})s for update, more than half of period')
+                    except Exception as ex:
+                        self.logger.error(f'Exception for {dev=}', exc_info=sys.exc_info())
                 try:
                     cmd = cmdq.get(timeout=0.01)
                     if cmd is None:
@@ -248,5 +276,7 @@ class SimulationEngine:
 
     def write_channel(self, channel_name: str, value: Any):
         assert channel_name in self.channels
+        if channel_name == 'TEST:CHANNEL:T':
+            raise Exception
         self.logger.debug(f'Writing ({value}) to channel ({channel_name})')
         self.channel_to_mapper[channel_name].process_write(channel_name, value)

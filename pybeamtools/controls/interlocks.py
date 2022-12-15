@@ -154,7 +154,7 @@ class LimitInterlock(Interlock):
         except Exception as ex:
             if not isinstance(ex, InterlockInternalError):
                 self.logger.error(f'Unexpected exception ({ex})')
-            raise {'result': False, 'ex': ex, 'reason': 'ex'}
+            return {'result': False, 'ex': ex, 'reason': 'ex'}
         return {'result': True, 'ex': None, 'reason': None}
 
 
@@ -211,4 +211,5 @@ class RatelimitInterlock(Interlock):
             self.time_start = now
             return {'result': True, 'ex': None, 'reason': None}
         else:
-            return {'result': False, 'ex': None, 'reason': 'Rate throttled, '}
+            return {'result': False, 'ex': None,
+                    'reason': f'Rate throttled (delay {now-self.time_start}, require {self.options.min_delay})'}

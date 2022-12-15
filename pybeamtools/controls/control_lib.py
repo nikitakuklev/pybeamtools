@@ -12,7 +12,7 @@ from .interlocks import Interlock, InterlockOptions
 
 from .distributed import ProcessManager
 from .knobs import Knob, KnobManager
-from .network import EPICSConnectionManager, PVOptions, SimConnectionManager
+from .network import EPICSConnectionManager, PVOptions, SimConnectionManager, ConnectionOptions
 
 
 class ReadbackOptions(BaseModel):
@@ -22,7 +22,7 @@ class ReadbackOptions(BaseModel):
                                           description="error if readback doesn't match after this long")
     delay_after_readback: float = Field(3.0,
                                         description="minimum time to wait after readback confirmed")
-    total_set_and_readback_cycle_min_time: float = Field(None,
+    total_set_and_readback_cycle_min_time: float = Field(0.0,
                                                          description="minimum overall cycle time (to keep pacing roughly same)")
 
 
@@ -30,16 +30,11 @@ class WriteOptions(BaseModel):
     pass
 
 
-class ConnectionOptions(BaseModel):
-    network: Literal['epics', 'dummy'] = 'dummy'
-
-
 class AcceleratorOptions(BaseModel):
     write_settings: WriteOptions = WriteOptions()
     readback_settings: ReadbackOptions = ReadbackOptions()
     connection_settings: ConnectionOptions = ConnectionOptions()
     interlocks: list[InterlockOptions] = []
-    pvs: list[PVOptions] = []
 
 
 class Accelerator:
@@ -57,17 +52,16 @@ class Accelerator:
 
         self.pm = ProcessManager()
         if options.connection_settings.network == 'epics':
-            self.cm = EPICSConnectionManager(acc=self, ctx=ctx)
+            self.cm = EPICSConnectionManager(acc=self,
+                                             options=options.connection_settings, ctx=ctx)
         elif options.connection_settings.network == 'dummy':
-            self.cm = SimConnectionManager(acc=self, ctx=ctx)
+            self.cm = SimConnectionManager(acc=self,
+                                           options=options.connection_settings, ctx=ctx)
         self.km = KnobManager()
 
         self.interlocks: list[Interlock] = []
         self.pvn_to_ilocks_map = {}
 
-        # self.logger.info('Spawning repeater')
-        # from caproto.sync import repeater
-        # repeater.spawn_repeater()
         self.logger.info('Startup finished')
 
     def __getitem__(self, item):
@@ -227,7 +221,10 @@ class Accelerator:
         self.logger.info(f'Interlock ({interlock.uuid}) with PV list ({interlock.options.pv_list}) added')
 
     def remove_interlock(self, interlock: Interlock):
-        pass
+        assert interlock in self.interlocks
+        self.pm.stop_interlock(interlock)
+        self.interlocks.remove(interlock)
+        self.logger.info(f'Interlock ({interlock.uuid}) with PV list ({interlock.options.pv_list}) removed')
 
     def read_fresh(self, pvs_read, timeout=1.0, now=None, min_readings=1, max_readings=None,
                    reduce='mean', include_timestamps=False, use_buffer=True):
