@@ -18,6 +18,7 @@ from sim.devices import UNIXTimer
 
 logger = logging.getLogger(__name__)
 
+
 class TestEPICSPV:
     @pytest.fixture(autouse=False)
     def soft_ioc(self, sim_engine):
@@ -37,10 +38,10 @@ class TestEPICSPV:
             def callback(sub, response: np.ndarray):
                 name = sub.name
                 logger.debug(f'Soft IOC put callback for PV ({sub.name}): ({response})')
-                #logger.debug(f'{type(name)=} {type(response[0])=}')
-                #logger.debug(f'{sioc=} {sioc.__dict__=}')
-                #sioc.bl.pvdb[name].write(response[0], verify_value=False)
-                #sioc.ping()
+                # logger.debug(f'{type(name)=} {type(response[0])=}')
+                # logger.debug(f'{sioc=} {sioc.__dict__=}')
+                # sioc.bl.pvdb[name].write(response[0], verify_value=False)
+                # sioc.ping()
                 sioc.send_updates(name, response)
 
             cb = callback
@@ -69,10 +70,10 @@ class TestEPICSPV:
             def callback(sub, response: np.ndarray):
                 name = sub.name
                 logger.debug(f'Soft IOC put callback for PV ({sub.name}): ({response})')
-                #logger.debug(f'{type(name)=} {type(response[0])=}')
-                #logger.debug(f'{sioc=} {sioc.__dict__=}')
-                #sioc.bl.pvdb[name].write(response[0], verify_value=False)
-                #sioc.ping()
+                # logger.debug(f'{type(name)=} {type(response[0])=}')
+                # logger.debug(f'{sioc=} {sioc.__dict__=}')
+                # sioc.bl.pvdb[name].write(response[0], verify_value=False)
+                # sioc.ping()
                 sioc.send_updates(name, response)
 
             cb = callback
@@ -84,7 +85,7 @@ class TestEPICSPV:
 
     @pytest.fixture
     def sim_engine(self) -> SimulationEngine:
-        from pybeamtools.sim.core import SimulationEngine, ChannelMap, ChannelMapper
+        from pybeamtools.sim.core import SimulationEngine, ChannelMap, ChannelMapSet
         from pybeamtools.sim.devices import RealisticMagnet
 
         sim = SimulationEngine()
@@ -103,11 +104,11 @@ class TestEPICSPV:
         def set(device, output, value):
             return device.write(value)
 
-        m = ChannelMap(device=mag, output='TEST:CHANNEL:A', read_fun=get, write_fun=set)
-        m2 = ChannelMap(device=mag2, output='TEST:CHANNEL:B', read_fun=get, write_fun=set)
-        m3 = ChannelMap(device=mag3, output='TEST:CHANNEL:C', read_fun=get, write_fun=set)
-        t = ChannelMap(device=unix, output='TEST:CHANNEL:T', read_fun=get, write_fun=None)
-        chm = ChannelMapper(maps=[m, m2, m3, t])
+        m = ChannelMap(device=mag, channels='TEST:CHANNEL:A', read_fun=get, write_fun=set)
+        m2 = ChannelMap(device=mag2, channels='TEST:CHANNEL:B', read_fun=get, write_fun=set)
+        m3 = ChannelMap(device=mag3, channels='TEST:CHANNEL:C', read_fun=get, write_fun=set)
+        t = ChannelMap(device=unix, channels='TEST:CHANNEL:T', read_fun=get, write_fun=None)
+        chm = ChannelMapSet(maps=[m, m2, m3, t])
         sim.add_mapper(chm)
         sim.start_update_thread()
         sim.read_channel('TEST:CHANNEL:A')
@@ -119,7 +120,7 @@ class TestEPICSPV:
 
     @pytest.fixture
     def sim_engine_low(self) -> SimulationEngine:
-        from pybeamtools.sim.core import SimulationEngine, ChannelMap, ChannelMapper
+        from pybeamtools.sim.core import SimulationEngine, ChannelMap, ChannelMapSet
         from pybeamtools.sim.devices import RealisticMagnet
 
         sim = SimulationEngine()
@@ -127,15 +128,16 @@ class TestEPICSPV:
         sim.add_device(mag, period=5.0)
         mag2 = RealisticMagnet(name='TEST:DEVICE:B', value=1.5)
         sim.add_device(mag2, period=1.0)
+
         def get(device, output):
             return device.read()
 
         def set(device, output, value):
             return device.write(value)
 
-        m = ChannelMap(device=mag, output='TEST:CHANNEL:A', read_fun=get, write_fun=set)
-        m2 = ChannelMap(device=mag2, output='TEST:CHANNEL:B', read_fun=get, write_fun=set)
-        chm = ChannelMapper(maps=[m, m2])
+        m = ChannelMap(device=mag, channels='TEST:CHANNEL:A', read_fun=get, write_fun=set)
+        m2 = ChannelMap(device=mag2, channels='TEST:CHANNEL:B', read_fun=get, write_fun=set)
+        chm = ChannelMapSet(maps=[m, m2])
         sim.add_mapper(chm)
         sim.start_update_thread()
         time.sleep(0)
@@ -179,8 +181,8 @@ class TestEPICSPV:
         sim_engine.TRACE = True
         time.sleep(10)
         logger.info(f'{acc.cm.last_results_map=}')
-        for k,v in acc.cm.circular_buffers_map.items():
-            #assert len(v) > 2
+        for k, v in acc.cm.circular_buffers_map.items():
+            # assert len(v) > 2
             logger.info(f'{k}:{len(v)}')
 
     def test_pv_simple2(self, sim_engine_with_pvs):
@@ -194,7 +196,7 @@ class TestEPICSPV:
         t2 = pv4.read()
         assert t2.data > t1.data
         logger.info(f'{acc.cm.last_results_map=}')
-        for k,v in acc.cm.circular_buffers_map.items():
+        for k, v in acc.cm.circular_buffers_map.items():
             assert len(v) > 2
             logger.info(f'{k}:{len(v)}')
 
@@ -238,12 +240,10 @@ class TestEPICSPV:
         acc.pm.stop_interlock(ilock)
 
 
-
-
 class TestSimPV:
     @pytest.fixture
     def sim_engine(self) -> SimulationEngine:
-        from pybeamtools.sim.core import SimulationEngine, ChannelMap, ChannelMapper
+        from pybeamtools.sim.core import SimulationEngine, ChannelMap, ChannelMapSet
         from pybeamtools.sim.devices import RealisticMagnet
 
         sim = SimulationEngine()
@@ -260,10 +260,10 @@ class TestSimPV:
         def set(device, output, value):
             return device.write(value)
 
-        m = ChannelMap(device=mag, output='TEST:CHANNEL:A', read_fun=get, write_fun=set)
-        m2 = ChannelMap(device=mag2, output='TEST:CHANNEL:B', read_fun=get, write_fun=set)
-        m3 = ChannelMap(device=mag3, output='TEST:CHANNEL:C', read_fun=get, write_fun=set)
-        chm = ChannelMapper(maps=[m, m2, m3])
+        m = ChannelMap(device=mag, channels='TEST:CHANNEL:A', read_fun=get, write_fun=set)
+        m2 = ChannelMap(device=mag2, channels='TEST:CHANNEL:B', read_fun=get, write_fun=set)
+        m3 = ChannelMap(device=mag3, channels='TEST:CHANNEL:C', read_fun=get, write_fun=set)
+        chm = ChannelMapSet(maps=[m, m2, m3])
         sim.add_mapper(chm)
         sim.start_update_thread()
         sim.read_channel('TEST:CHANNEL:A')
@@ -313,10 +313,13 @@ class TestSimPV:
         assert r == 1.3
 
         with pytest.raises(InvalidWriteError):
+            # None not valid
             pv.write(None)
         with pytest.raises(InvalidWriteError):
+            # bytes not valid
             pv.write('bla'.encode())
         with pytest.raises(ControlLibException):
+            # too high
             pv.write(6.0)
 
         pv_settings = PVOptions(name='TEST:CHANNEL:C', low=0.0, high=5.0,
@@ -335,7 +338,6 @@ class TestSimPV:
             assert acc.cm.last_results_map[ch] is not None, ch
 
         assert acc.cm.last_results_map['TEST:CHANNEL:C'] is None
-
 
     def test_interlock_simple(self, sim_engine_with_pvs):
         sim_engine, acc, pv, pv2, pv3 = sim_engine_with_pvs

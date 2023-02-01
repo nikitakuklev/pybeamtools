@@ -21,6 +21,7 @@ class InterlockOptions(BaseModel):
     read_events: list[str] = None
     write_events: list[str] = None
     priority: NonNegativeInt = 0
+    ilock_type: str = ''
 
     @root_validator
     def check(cls, values):
@@ -87,6 +88,7 @@ class Interlock(ABC):
 
 
 class LimitInterlockOptions(InterlockOptions):
+    ilock_type: str = 'limit'
     limits: dict[str, tuple[Optional[float], Optional[float]]]
     block_all_writes: bool = False
 
@@ -181,6 +183,7 @@ class DenyInterlock(Interlock):
 
 
 class RatelimitInterlockOptions(InterlockOptions):
+    ilock_type: str = 'ratelimit'
     min_delay: NonNegativeFloat
 
 

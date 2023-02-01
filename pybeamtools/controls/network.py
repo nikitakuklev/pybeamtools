@@ -1,142 +1,20 @@
 import collections
-import json
 import logging
-import time
-import uuid
 from abc import abstractmethod
-from enum import Enum
-from typing import Callable, Union, Optional, Any, Literal
+from typing import Any, Callable, Literal
 
-import caproto
 import caproto.threading.client
 import numpy as np
-
-from ..sim.core import SimulationEngine
-from ..utils.pydantic import to_sdds
-from .errors import SecurityError, ControlLibException, InvalidWriteError
+from .pv import EPICSPV, PV, PVOptions, SimPV
 from pydantic import BaseModel
 
-
-class PVAccess(Enum):
-    READONLY = 1
-    #    WRITE = 2
-    READWRITE = 3
-
-class WriteResponse:
-    def __init__(self, ts, data):
-        self.timestamp = ts
-        self.data = data
-
-class PVOptions(BaseModel):
-    name: str
-    low: Union[float, int] = None
-    high: Union[float, int] = None
-    monitor: bool = True
-    security: PVAccess = PVAccess.READONLY
-    read_timeout: float = 2.0
-    write_timeout: float = 5.0
-
-    class Config:
-        extra = 'forbid'
-
-    def sdds(self):
-        return to_sdds(json.loads(self.json()))
-
-
-class PV:
-    def __init__(self, options: PVOptions):
-        self.uuid = str(uuid.uuid4())
-        self.name = options.name
-        self.options = options
-
-    @abstractmethod
-    def read(self, *, wait=True, callback=None,
-             timeout=None, data_type=None, data_count=None, notify=True):
-        pass
-
-    def __str__(self):
-        return f'{self.__class__.__name__} {self.options}'
-
-    def __repr__(self):
-        return self.__str__()
-
-    def _check_proposed_write(self, data):
-        if isinstance(data, (float, int)):
-            if self.options.low and data < self.options.low:
-                raise InvalidWriteError(f'Value {data} below bounds ({self.options.low}|{self.options.high})')
-                # return False
-            if self.options.high and data > self.options.high:
-                raise InvalidWriteError(f'Value {data} above bounds ({self.options.low}|{self.options.high})')
-        elif isinstance(data, str):
-            pass
-        else:
-            raise ControlLibException(f'Unrecognized value  ({data=}) ({type(data)=})')
-
-
-class EPICSPV(PV):
-    def __init__(self, options: PVOptions):
-        self.cm: Optional[EPICSConnectionManager] = None
-        self.lower_ctrl_limit = self.upper_ctrl_limit = None
-        super().__init__(options)
-
-    @property
-    def caproto(self) -> Optional[caproto.threading.client.PV]:
-        if self.cm is None:
-            return None
-        else:
-            return self.cm.pv_caproto_map[self.name]
-
-    def read(self, *, wait=True, callback=None,
-             timeout=None, data_type=None, data_count=None, notify=True):
-        cm = self.caproto
-        if cm is None:
-            raise ControlLibException(f'PV is not bound to a connection manager')
-        return self.caproto.read(wait=wait, callback=callback,
-                                 timeout=self.options.read_timeout if timeout is None else timeout,
-                                 data_type=data_type, data_count=data_count, notify=notify)
-
-    def write(self, data, *, wait=True, callback=None,
-              timeout=None, notify=None, data_type=None, data_count=None):
-        # Check access
-        if self.options.security != PVAccess.READWRITE:
-            raise SecurityError(f'Writes on PV {self.name} are forbidden')
-        # Propose a write - any issues will raise an Exception
-        self.cm.acc.propose_writes(self.name, data)
-        # Perform write
-        return self.caproto.write(data, wait=wait, callback=callback,
-                                  timeout=self.options.write_timeout if timeout is None else timeout,
-                                  notify=notify, data_type=data_type, data_count=data_count)
-
-
-class SimPV(PV):
-    def __init__(self, options: PVOptions):
-        self.cm: Optional[SimConnectionManager] = None
-        super().__init__(options)
-
-    def read(self, *, wait=True, callback=None,
-             timeout=None, data_type=None, data_count=None, notify=True):
-        if timeout is not None or data_type is not None or data_count is not None:
-            raise
-        return self.cm.sim.read_channel(self.name)
-
-    def write(self, data, *, wait=True, callback=None,
-              timeout=None, notify=None, data_type=None, data_count=None) -> WriteResponse:
-        if not isinstance(data, (int, float, str)):
-            raise InvalidWriteError(f'Data {data} is not of valid type')
-        # Check access
-        if self.options.security != PVAccess.READWRITE:
-            raise SecurityError(f'Write on PV ({self.name}) forbidden by access mask')
-        # Propose a write - any issues will raise an Exception
-        self.cm.acc.propose_writes([self.name], [data])
-        # Perform write
-        self.cm.sim.write_channel(self.name, data)
-        return WriteResponse(ts=time.time(), data=None)
 
 
 
 class ConnectionOptions(BaseModel):
     network: Literal['epics', 'dummy'] = 'dummy'
     pvs: list[PVOptions] = []
+    timeout: float = 5.0
 
 
 class ConnectionManager:
@@ -146,6 +24,7 @@ class ConnectionManager:
         self.circular_buffers_map: dict[str, collections.deque] = {}
         self.last_results_map: dict[str, Any] = {}
         self.callbacks_map: dict[str, list[Callable]] = {}
+        self.custom_callbacks_map: dict[str, list[Callable]] = {}
         self.subscribed_pv_names: list[str] = []
         self.logger = logging.getLogger(self.__class__.__name__)
         self.options = options
@@ -170,11 +49,17 @@ class ConnectionManager:
 
 
 class SimConnectionManager(ConnectionManager):
-    def __init__(self, acc, options, ctx: SimulationEngine) -> None:
+    def __init__(self, acc, options, ctx) -> None:
+        from ..sim.core import SimulationEngine
         super().__init__(acc, options)
         self.logger.info('Creating dummy connection manager')
         assert ctx.is_running
-        self.sim = ctx
+        self.sim: SimulationEngine = ctx
+
+        if len(options.pvs) > 0:
+            names = [x.name for x in self.options.pvs]
+            opts = {x.name: x for x in self.options.pvs}
+            self.add_pvs(names, opts)
 
     def add_pvs(self, pv_names: list[str], pvs_configs: dict[str, PVOptions]):
         self.logger.debug(f'Adding {len(pv_names)} PVs')
@@ -243,7 +128,7 @@ class SimConnectionManager(ConnectionManager):
 
 class EPICSConnectionManager(ConnectionManager):
     def __init__(self, acc, options, ctx=None) -> None:
-        super().__init__(acc)
+        super().__init__(acc, options)
         self.logger.info('Creating EPICS connection manager')
         if ctx is None:
             self.logger.info('Context not provided, creating new caproto context')
@@ -254,6 +139,7 @@ class EPICSConnectionManager(ConnectionManager):
         # All maps are keyed on string due to better performance of the underlying hashmap
         self.pv_caproto_map = {}
         self.initial_pv_data_map = {}
+
 
     def __connection_state_callback(self, pv: caproto.threading.client.PV, state: str):
         self.logger.debug(f'Connection state of {pv.name} changed to {state}')
@@ -280,6 +166,7 @@ class EPICSConnectionManager(ConnectionManager):
             self.pv_caproto_map[pv_name] = pvs_caproto[i]
             self.circular_buffers_map[pv_name] = collections.deque(maxlen=50)
             self.callbacks_map[pv_name] = []
+            self.custom_callbacks_map[pv_name] = []
             self.pv_map[pv_name] = pv
             self.last_results_map[pv_name] = None
             if pv.options.monitor:
@@ -315,7 +202,7 @@ class EPICSConnectionManager(ConnectionManager):
                 raise KeyError(f'PV ({pv_name}) was not found in known list, make sure to add first')
         return [self.pv_map[pv_name] for pv_name in pv_names]
 
-    def subscribe_monitor(self, pv: PV):
+    def subscribe_monitor(self, pv: EPICSPV):
         if len(self.callbacks_map[pv.name]) != 0:
             # TODO: allow custom ones
             raise ValueError(f'PV {pv.name} already has existing subscriptions')
@@ -330,6 +217,12 @@ class EPICSConnectionManager(ConnectionManager):
         subscription.add_callback(cb)
         self.callbacks_map[pv.name].append(cb)
         self.subscribed_pv_names.append(pv.name)
+
+    def subscribe_custom(self, pv: EPICSPV, callback: Callable):
+        """ Add custom callback """
+        subscription = pv.caproto.subscribe(data_type='time')
+        subscription.add_callback(callback)
+        self.custom_callbacks_map[pv.name].append(callback)
 
     def _get_recent_buffer_data(self, name: str, start: float = None):
         buf = self.circular_buffers_map[name]

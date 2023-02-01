@@ -5,14 +5,18 @@ from typing import Literal
 
 import numpy as np
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 from .errors import InterlockWriteError, ControlLibException, WrappedException
-from .interlocks import Interlock, InterlockOptions
+from .interlocks import Interlock, InterlockOptions, LimitInterlock, LimitInterlockOptions, \
+    RatelimitInterlockOptions, \
+    RatelimitInterlock
 
 from .distributed import ProcessManager
 from .knobs import Knob, KnobManager
 from .network import EPICSConnectionManager, PVOptions, SimConnectionManager, ConnectionOptions
+
+__all__ = ['AcceleratorOptions', 'Accelerator']
 
 
 class ReadbackOptions(BaseModel):
@@ -36,14 +40,25 @@ class AcceleratorOptions(BaseModel):
     connection_settings: ConnectionOptions = ConnectionOptions()
     interlocks: list[InterlockOptions] = []
 
+    @validator("interlocks")
+    def validate_interlcoks(cls, v):
+        vals = []
+        for x in v:
+            if x.ilock_type == 'limit':
+                ilock = LimitInterlockOptions.parse_obj(x)
+            elif x.ilock_type == 'ratelimit':
+                ilock = RatelimitInterlockOptions.parse_obj(x)
+            else:
+                raise Exception(f'Unrecognized interlock type {x.ilock_type}')
+            vals.append(ilock)
+        return vals
+
 
 class Accelerator:
-    def __init__(self, options: AcceleratorOptions = None, ctx=None) -> None:
+    def __init__(self, options: AcceleratorOptions, ctx=None) -> None:
         # config_root_logging()
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.info('Control lib init')
-        if options is None:
-            options = AcceleratorOptions()
 
         self.options = options
         self.knobs = {}
@@ -62,7 +77,20 @@ class Accelerator:
         self.interlocks: list[Interlock] = []
         self.pvn_to_ilocks_map = {}
 
+        if len(options.interlocks) > 0:
+            for x in options.interlocks:
+                if x.ilock_type == 'limit':
+                    ilock = LimitInterlock(x)
+                elif x.ilock_type == 'ratelimit':
+                    ilock = RatelimitInterlock(x)
+                else:
+                    raise Exception(f'Unrecognized interlock type {x.ilock_type}')
+                self.add_interlock(ilock)
         self.logger.info('Startup finished')
+
+    @staticmethod
+    def get_default_options():
+        return AcceleratorOptions()
 
     def __getitem__(self, item):
         return self.cm.get_pvs([item])[0]
@@ -92,7 +120,8 @@ class Accelerator:
     def add_knob(self,
                  write_pv_name: str,
                  readback_pv_name: str = None,
-                 store_current_values: bool = False):
+                 store_current_values: bool = False
+                 ):
         assert write_pv_name in self.cm, f'Write PV {write_pv_name} has not been added'
         assert readback_pv_name in self.cm, f'Readback PV {readback_pv_name} has not been added'
         data = {}
@@ -152,10 +181,11 @@ class Accelerator:
             pv = self.cm.pv_map[pv_name]
             pv._check_proposed_write(data)
         self.logger.debug(f'Individual PV validation passed')
-        triggered_interlocks = [i for i in self.interlocks if i.check_match_write(pvs_name, pvs_data)]
+        triggered_interlocks = [i for i in self.interlocks if
+                                i.check_match_write(pvs_name, pvs_data)]
         # triggered_uuids = [i.uuid for i in triggered_interlocks]
         self.logger.info(
-            f'Write on ({pvs_name}) triggered ({len(triggered_interlocks)}) of ({len(self.interlocks)}) interlocks')
+                f'Write on ({pvs_name}) triggered ({len(triggered_interlocks)}) of ({len(self.interlocks)}) interlocks')
         if len(triggered_interlocks) == 0:
             self.logger.debug('No interlocks triggered, skip polling stage')
             return
@@ -173,12 +203,14 @@ class Accelerator:
                 if v is None:
                     self.logger.warning(f'No last value available for PV ({k})')
                     raise ControlLibException(
-                        f'No values available for PV ({k}), make sure to read or enable monitoring')
+                            f'No values available for PV ({k}), make sure to read or enable monitoring')
                     # data[k] = v
                 else:
                     pv_data[k] = v
-            data_packages.append({'trigger_pvs': triggered_pvs, 'data': pv_data, 'timestamps': None})
-        self.logger.debug(f'Polling process manager with data packages of sizes ({[len(d) for d in data_packages]})')
+            data_packages.append(
+                    {'trigger_pvs': triggered_pvs, 'data': pv_data, 'timestamps': None})
+        self.logger.debug(
+                f'Polling process manager with data packages of sizes ({[len(d) for d in data_packages]})')
         self.logger.debug(f'{data_packages=}')
         t1 = time.perf_counter()
         responses = self.pm.poll(interlocks_list=triggered_interlocks, data_list=data_packages)
@@ -200,14 +232,16 @@ class Accelerator:
             #     failed_ex = True
             else:
                 if not r.data['result']:
-                    self.logger.error(f'Interlock ({r.uuid}) rejected proposed write - result was ({r.data})')
+                    self.logger.error(
+                            f'Interlock ({r.uuid}) rejected proposed write - result was ({r.data})')
                     failed_result = True
 
         if failed_ex:
             raise InterlockWriteError(
-                f'Write on ({pvs_name}) of ({pvs_data}) failed due to exceptions raised by interlocks')
+                    f'Write on ({pvs_name}) of ({pvs_data}) failed due to exceptions raised by interlocks')
         if failed_result:
-            raise InterlockWriteError(f'Write on ({pvs_name}) of ({pvs_data}) failed due to interlock')
+            raise InterlockWriteError(
+                    f'Write on ({pvs_name}) of ({pvs_data}) failed due to interlock')
 
     def add_interlock(self, interlock: Interlock):
         for pv_name in interlock.options.pv_list:
@@ -218,16 +252,20 @@ class Accelerator:
                 raise ControlLibException(f'Interlock ({interlock.uuid}) is already added')
         self.pm.start_interlock(interlock)
         self.interlocks.append(interlock)
-        self.logger.info(f'Interlock ({interlock.uuid}) with PV list ({interlock.options.pv_list}) added')
+        self.options.interlocks.append(interlock.options)
+        self.logger.info(
+                f'Interlock ({interlock.uuid}) with PV list ({interlock.options.pv_list}) added')
 
     def remove_interlock(self, interlock: Interlock):
         assert interlock in self.interlocks
         self.pm.stop_interlock(interlock)
         self.interlocks.remove(interlock)
-        self.logger.info(f'Interlock ({interlock.uuid}) with PV list ({interlock.options.pv_list}) removed')
+        self.logger.info(
+                f'Interlock ({interlock.uuid}) with PV list ({interlock.options.pv_list}) removed')
 
     def read_fresh(self, pvs_read, timeout=1.0, now=None, min_readings=1, max_readings=None,
-                   reduce='mean', include_timestamps=False, use_buffer=True):
+                   reduce='mean', include_timestamps=False, use_buffer=True
+                   ):
         """ Read next PV update or timeout """
         if now is None:
             now = time.time()  # Assume roughly synced with IOC
@@ -263,7 +301,7 @@ class Accelerator:
                         responses.append(r)
                 if time.perf_counter() - t_start > timeout:
                     raise Exception(
-                        f'PV {pv.name} read timed out at {time.time()} (record time {r.metadata.timestamp})')
+                            f'PV {pv.name} read timed out at {time.time()} (record time {r.metadata.timestamp})')
                 # print(f'Continuing PV read {pv.name} at {time.time()} (record time {r.metadata.timestamp})')
                 time.sleep(0.01)
 
@@ -302,8 +340,10 @@ class Accelerator:
                 values[i] = value
         return values
 
-    def set_and_verify_multiple(self, pvdict, timeout=1.0, readback_kwargs=None, readback_delay_min=None,
-                                readback_delay_max=None):
+    def set_and_verify_multiple(self, pvdict, timeout=1.0, readback_kwargs=None,
+                                readback_delay_min=None,
+                                readback_delay_max=None
+                                ):
         """ Set PVs and verify readbacks if available """
         from caproto.threading.client import Batch
         kv = self.kv
@@ -324,7 +364,8 @@ class Accelerator:
                 raise Exception(f'Please provide tolerance for {pvn}')
             assert not np.isnan(low) and not np.isnan(high)
             assert low <= value <= high, f'PV {pv_input} value {value} outside {low}<->{high}'
-            assert atol < np.abs(high - low), f'PV {pv_input} tolerance {atol} larger than limit range {low}<->{high}'
+            assert atol < np.abs(
+                    high - low), f'PV {pv_input} tolerance {atol} larger than limit range {low}<->{high}'
             # val = pv_read.read().data[0]
             # if np.isclose(val, value, atol=atol, rtol=0):
             #     #del pvdict[pvn]
@@ -360,8 +401,10 @@ class Accelerator:
                 for (pvnl, valuel) in pvdict.items():
                     pv_inputl = self.kv[pvnl]
                     atoll = df.loc[pv_inputl.name, 'atol']
-                    print(f'{pvnl:20}: {valuel=} {last_read[pvnl]=} {(valuel - last_read[pvnl])=} {atoll=}')
-                raise IOError(f'Setting {pv_input.name} failed - readback {pv_read.name} ({val}) bad (want {value})')
+                    print(
+                            f'{pvnl:20}: {valuel=} {last_read[pvnl]=} {(valuel - last_read[pvnl])=} {atoll=}')
+                raise IOError(
+                        f'Setting {pv_input.name} failed - readback {pv_read.name} ({val}) bad (want {value})')
             time.sleep(0.1)
 
         t_spent = time.perf_counter() - t_start

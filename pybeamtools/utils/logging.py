@@ -16,8 +16,8 @@ def config_root_logging(level=logging.DEBUG):
     for handler in root.handlers:
         root.removeHandler(handler)
     logging.basicConfig(level=level,
-                        # format='%(asctime)s %(processName)-10s %(name)s %(levelname)-8s %(message)s',
-                        format='[%(levelname)-5.5s] [%(threadName)15s] [%(asctime)s %(filename)15s %(lineno)3s] [%(name)s] %(message)s',
+                        # format='%(asctime)s %(processName)-10s %(name)s %(levelname)-8s %(message)s', #[%(name)s]
+                        format='[%(levelname)-5.5s][%(threadName)10.10s][%(asctime)s.%(msecs)03d %(filename)10s %(lineno)3s] %(message)s',
                         datefmt='%H:%M:%S')
     logger = logging.getLogger(__name__)
     logger.info(f'Starting shared logging thread on PID {os.getpid()}')
