@@ -1,308 +1,94 @@
-import asyncio
 import logging
 import time
-from threading import Thread
 
-import numpy as np
-import pytest
-import os
-
-from pybeamtools.controls.errors import ControlLibException, SecurityError, InvalidWriteError, InterlockWriteError
-from pybeamtools.sim.core import SimulationEngine
 import pybeamtools.controls as pc
+import pytest
+from pybeamtools.controls import PVAccess
 from pybeamtools.controls.control_lib import ConnectionOptions
-from pybeamtools.controls.network import SimPV, PVOptions, PVAccess, EPICSPV
+from pybeamtools.controls.errors import ControlLibException, InterlockWriteError, InvalidWriteError, \
+    SecurityError
+from pybeamtools.controls.network import PVOptions, SimPV
+from pybeamtools.sim.core import SignalEngineOptions, SimulationEngine
+from pybeamtools.sim.pddevices import EchoDevice, EchoDeviceOptions, ModelPairDevice, \
+    ModelPairDeviceOptions, SignalContext
+from sim.devices import RealisticModel, RealisticModelOptions
 from pybeamtools.controls.interlocks import LimitInterlock, LimitInterlockOptions
-from pybeamtools.sim.softioc import EchoIOC
-from sim.devices import UNIXTimer
-
 logger = logging.getLogger(__name__)
 
+t = 0.0
 
-class TestEPICSPV:
-    @pytest.fixture(autouse=False)
-    def soft_ioc(self, sim_engine):
-        os.environ['EPICS_CA_AUTO_ADDR_LIST'] = 'no'
-        os.environ['EPICS_CA_ADDR_LIST'] = '127.0.0.1'
 
-        from caproto.sync import repeater
-        repeater.spawn_repeater()
-        time.sleep(0.1)
-
-        channels = ['TEST:CHANNEL:A', 'TEST:CHANNEL:B', 'TEST:CHANNEL:C', 'TEST:CHANNEL:T']
-        sioc = EchoIOC(channels=channels, sim_engine=sim_engine)
-        sioc.setup()
-        sioc.run_in_background()
-        logger.debug(f'Soft IOC started')
-        for ch in channels:
-            def callback(sub, response: np.ndarray):
-                name = sub.name
-                logger.debug(f'Soft IOC put callback for PV ({sub.name}): ({response})')
-                # logger.debug(f'{type(name)=} {type(response[0])=}')
-                # logger.debug(f'{sioc=} {sioc.__dict__=}')
-                # sioc.bl.pvdb[name].write(response[0], verify_value=False)
-                # sioc.ping()
-                sioc.send_updates(name, response)
-
-            cb = callback
-            subscription = sim_engine.subscribe_channel(ch)
-            subscription.add_callback(cb)
-
-        time.sleep(0.1)
-        return sioc
-
-    @pytest.fixture(autouse=False)
-    def soft_ioc_low(self, sim_engine_low):
-        sim_engine = sim_engine_low
-        os.environ['EPICS_CA_AUTO_ADDR_LIST'] = 'no'
-        os.environ['EPICS_CA_ADDR_LIST'] = '127.0.0.1'
-
-        from caproto.sync import repeater
-        repeater.spawn_repeater()
-        time.sleep(0.1)
-
-        channels = ['TEST:CHANNEL:A', 'TEST:CHANNEL:B']
-        sioc = EchoIOC(channels=channels, sim_engine=sim_engine)
-        sioc.setup()
-        sioc.run_in_background()
-        logger.debug(f'Soft IOC started')
-        for ch in channels:
-            def callback(sub, response: np.ndarray):
-                name = sub.name
-                logger.debug(f'Soft IOC put callback for PV ({sub.name}): ({response})')
-                # logger.debug(f'{type(name)=} {type(response[0])=}')
-                # logger.debug(f'{sioc=} {sioc.__dict__=}')
-                # sioc.bl.pvdb[name].write(response[0], verify_value=False)
-                # sioc.ping()
-                sioc.send_updates(name, response)
-
-            cb = callback
-            subscription = sim_engine.subscribe_channel(ch)
-            subscription.add_callback(cb)
-
-        time.sleep(0.1)
-        return sioc
-
-    @pytest.fixture
-    def sim_engine(self) -> SimulationEngine:
-        from pybeamtools.sim.core import SimulationEngine, ChannelMap, ChannelMapSet
-        from pybeamtools.sim.devices import RealisticMagnet
-
-        sim = SimulationEngine()
-        mag = RealisticMagnet(name='TEST:DEVICE:A', value=0.5)
-        sim.add_device(mag, period=5.0)
-        mag2 = RealisticMagnet(name='TEST:DEVICE:B', value=1.5)
-        sim.add_device(mag2, period=5.0)
-        mag3 = RealisticMagnet(name='TEST:DEVICE:C', value=2.5)
-        sim.add_device(mag3, period=5.0)
-        unix = UNIXTimer(name='TEST:DEVICE:T')
-        sim.add_device(unix, period=2.0)
-
-        def get(device, output):
-            return device.read()
-
-        def set(device, output, value):
-            return device.write(value)
-
-        m = ChannelMap(device=mag, channels='TEST:CHANNEL:A', read_fun=get, write_fun=set)
-        m2 = ChannelMap(device=mag2, channels='TEST:CHANNEL:B', read_fun=get, write_fun=set)
-        m3 = ChannelMap(device=mag3, channels='TEST:CHANNEL:C', read_fun=get, write_fun=set)
-        t = ChannelMap(device=unix, channels='TEST:CHANNEL:T', read_fun=get, write_fun=None)
-        chm = ChannelMapSet(maps=[m, m2, m3, t])
-        sim.add_mapper(chm)
-        sim.start_update_thread()
-        sim.read_channel('TEST:CHANNEL:A')
-        sim.read_channel('TEST:CHANNEL:B')
-        sim.read_channel('TEST:CHANNEL:C')
-        sim.read_channel('TEST:CHANNEL:T')
-        time.sleep(0)
-        return sim
-
-    @pytest.fixture
-    def sim_engine_low(self) -> SimulationEngine:
-        from pybeamtools.sim.core import SimulationEngine, ChannelMap, ChannelMapSet
-        from pybeamtools.sim.devices import RealisticMagnet
-
-        sim = SimulationEngine()
-        mag = RealisticMagnet(name='TEST:DEVICE:A', value=0.5)
-        sim.add_device(mag, period=5.0)
-        mag2 = RealisticMagnet(name='TEST:DEVICE:B', value=1.5)
-        sim.add_device(mag2, period=1.0)
-
-        def get(device, output):
-            return device.read()
-
-        def set(device, output, value):
-            return device.write(value)
-
-        m = ChannelMap(device=mag, channels='TEST:CHANNEL:A', read_fun=get, write_fun=set)
-        m2 = ChannelMap(device=mag2, channels='TEST:CHANNEL:B', read_fun=get, write_fun=set)
-        chm = ChannelMapSet(maps=[m, m2])
-        sim.add_mapper(chm)
-        sim.start_update_thread()
-        time.sleep(0)
-        return sim
-
-    @pytest.fixture
-    def sim_engine_with_pvs(self, sim_engine):
-        ao = pc.AcceleratorOptions(connection_settings=ConnectionOptions(network='epics'))
-        acc = pc.Accelerator(options=ao)
-        pv_settings = PVOptions(name='TEST:CHANNEL:A', low=0.0, high=5.0,
-                                security=PVAccess.READWRITE)
-        pv = EPICSPV(pv_settings)
-        pv_settings = PVOptions(name='TEST:CHANNEL:B', low=0.0, high=5.0,
-                                security=PVAccess.READWRITE)
-        pv2 = EPICSPV(pv_settings)
-        pv_settings = PVOptions(name='TEST:CHANNEL:C', low=0.0, high=5.0,
-                                security=PVAccess.READONLY)
-        pv3 = EPICSPV(pv_settings)
-        pv_settings = PVOptions(name='TEST:CHANNEL:T', security=PVAccess.READONLY)
-        pv4 = EPICSPV(pv_settings)
-        acc.add_pv_object([pv, pv2, pv3, pv4])
-        return sim_engine, acc, pv, pv2, pv3, pv4
-
-    @pytest.fixture
-    def sim_engine_with_pvs_low(self, sim_engine_low):
-        ao = pc.AcceleratorOptions(connection_settings=ConnectionOptions(network='epics'))
-        acc = pc.Accelerator(options=ao)
-        pv_settings = PVOptions(name='TEST:CHANNEL:A', low=0.0, high=5.0,
-                                security=PVAccess.READWRITE)
-        pv = EPICSPV(pv_settings)
-        acc.add_pv_object([pv])
-        return sim_engine_low, acc, pv
-
-    def test_pytest(self, sim_engine):
-        sim_engine.TRACE = True
-        assert os.environ['EPICS_CA_AUTO_ADDR_LIST'] == 'no'
-        time.sleep(10)
-
-    def test_pv_simple(self, sim_engine_with_pvs_low, soft_ioc_low):
-        sim_engine, acc, pv = sim_engine_with_pvs_low
-        sim_engine.TRACE = True
-        time.sleep(10)
-        logger.info(f'{acc.cm.last_results_map=}')
-        for k, v in acc.cm.circular_buffers_map.items():
-            # assert len(v) > 2
-            logger.info(f'{k}:{len(v)}')
-
-    def test_pv_simple2(self, sim_engine_with_pvs):
-        sim_engine, acc, pv, pv2, pv3, pv4 = sim_engine_with_pvs
-        time.sleep(2)
-        logger.info(f'{acc.cm.last_results_map=}')
-        t1 = pv4.read()
-        r = pv.read()
-        assert r.data == 0.5, r
-        time.sleep(2)
-        t2 = pv4.read()
-        assert t2.data > t1.data
-        logger.info(f'{acc.cm.last_results_map=}')
-        for k, v in acc.cm.circular_buffers_map.items():
-            assert len(v) > 2
-            logger.info(f'{k}:{len(v)}')
-
-    def test_pv_softioc(self, sim_engine_with_pvs, soft_ioc):
-        sim_engine, acc, pv, pv2, pv3 = sim_engine_with_pvs
-        interlock_limits = {'TEST:CHANNEL:A': (-1.0, 1.0),
-                            'TEST:CHANNEL:B': (-1.0, None),
-                            'TEST:CHANNEL:C': (-1.0, 1.0)}
-        pv_list = ['TEST:CHANNEL:A', 'TEST:CHANNEL:B', 'TEST:CHANNEL:C']
-        lopt = LimitInterlockOptions(pv_list=pv_list,
-                                     read_events=[],
-                                     write_events=pv_list,
-                                     limits=interlock_limits)
-        ilock = LimitInterlock(options=lopt)
-        acc.add_interlock(ilock)
-
-        with pytest.raises(SecurityError):
-            pv3.write(2.6)
-
-        assert acc.cm.last_results_map['TEST:CHANNEL:B'] is None, acc.cm.last_results_map
-        time.sleep(0.51)
-        assert acc.cm.last_results_map['TEST:CHANNEL:B'] is not None, acc.cm.last_results_map
-        assert acc.cm.last_results_map['TEST:CHANNEL:C'] is not None, acc.cm.last_results_map
-
-        with pytest.raises(InterlockWriteError):
-            pv.write(1.4)
-
-        with pytest.raises(InterlockWriteError):
-            pv2.write(-1.4)
-
-        assert soft_ioc.pvdb['TEST:CHANNEL:A'].value == 0.0
-        assert soft_ioc.pvdb['TEST:CHANNEL:B'].value == 0.0
-        assert soft_ioc.pvdb['TEST:CHANNEL:C'].value == 0.0
-
-        print(ilock.__dict__)
-        pv2.write(1.4)
-
-        assert sim_engine.read_channel('TEST:CHANNEL:B') == 1.4
-        assert soft_ioc.pvdb['TEST:CHANNEL:B'].value == 1.4
-
-        acc.pm.stop_interlock(ilock)
+def fixed_time():
+    return t
 
 
 class TestSimPV:
     @pytest.fixture
     def sim_engine(self) -> SimulationEngine:
-        from pybeamtools.sim.core import SimulationEngine, ChannelMap, ChannelMapSet
-        from pybeamtools.sim.devices import RealisticMagnet
-
-        sim = SimulationEngine()
-        mag = RealisticMagnet(name='TEST:DEVICE:A', value=0.5)
-        sim.add_device(mag, period=0.05)
-        mag2 = RealisticMagnet(name='TEST:DEVICE:B', value=1.5)
-        sim.add_device(mag2, period=0.05)
-        mag3 = RealisticMagnet(name='TEST:DEVICE:C', value=2.5)
-        sim.add_device(mag3, period=0.05)
-
-        def get(device, output):
-            return device.read()
-
-        def set(device, output, value):
-            return device.write(value)
-
-        m = ChannelMap(device=mag, channels='TEST:CHANNEL:A', read_fun=get, write_fun=set)
-        m2 = ChannelMap(device=mag2, channels='TEST:CHANNEL:B', read_fun=get, write_fun=set)
-        m3 = ChannelMap(device=mag3, channels='TEST:CHANNEL:C', read_fun=get, write_fun=set)
-        chm = ChannelMapSet(maps=[m, m2, m3])
-        sim.add_mapper(chm)
-        sim.start_update_thread()
-        sim.read_channel('TEST:CHANNEL:A')
-        sim.read_channel('TEST:CHANNEL:B')
-        sim.read_channel('TEST:CHANNEL:C')
-        time.sleep(0)
+        sim = SimulationEngine(SignalEngineOptions(time_function=fixed_time))
+        sim.TRACE = True
+        sim.TIME_TRACE = True
         return sim
 
     @pytest.fixture
-    def sim_engine_with_pvs(self, sim_engine):
-        ao = pc.AcceleratorOptions(connection_settings=ConnectionOptions(network='dummy'))
-        acc = pc.Accelerator(options=ao, ctx=sim_engine)
-        pv_settings = PVOptions(name='TEST:CHANNEL:A', low=0.0, high=5.0,
-                                security=PVAccess.READWRITE)
-        pv = SimPV(pv_settings)
-        pv_settings = PVOptions(name='TEST:CHANNEL:B', low=0.0, high=5.0,
-                                security=PVAccess.READWRITE)
-        pv2 = SimPV(pv_settings)
-        pv_settings = PVOptions(name='TEST:CHANNEL:C', low=0.0, high=5.0,
-                                security=PVAccess.READONLY)
-        pv3 = SimPV(pv_settings)
-        acc.add_pv_object([pv, pv2, pv3])
-        return sim_engine, acc, pv, pv2, pv3
+    def sim_engine_with_models(self, sim_engine: SimulationEngine) -> SimulationEngine:
+        ctx = SignalContext(se=sim_engine)
+        echo1 = EchoDevice(EchoDeviceOptions(name='echo1', data={'ECHO:1': 5.0}))
+        mag1model = RealisticModel(RealisticModelOptions(name='mag1model', value=0.5), t)
+        mag1 = ModelPairDevice(ModelPairDeviceOptions(name='DEVICE:A',
+                                                      readback_name='DEVICE:A_RB',
+                                                      device=mag1model))
+        mag2model = RealisticModel(RealisticModelOptions(name='mag2model', value=1.5), t)
+        mag2 = ModelPairDevice(ModelPairDeviceOptions(name='DEVICE:B',
+                                                      readback_name='DEVICE:B_RB',
+                                                      device=mag2model))
+        mag3model = RealisticModel(RealisticModelOptions(name='mag3model', value=2.5), t)
+        mag3 = ModelPairDevice(ModelPairDeviceOptions(name='DEVICE:C',
+                                                      readback_name='DEVICE:C_RB',
+                                                      device=mag3model))
+        ctx.add_device(echo1)
+        ctx.add_device(mag1)
+        ctx.add_device(mag2)
+        ctx.add_device(mag3)
 
-    def test_pv_sim(self, sim_engine: SimulationEngine):
+        sim_engine.enable_device(echo1)
+        sim_engine.enable_device(mag1)
+        sim_engine.enable_device(mag2)
+        sim_engine.enable_device(mag3)
+        return sim_engine
+
+    # @pytest.fixture
+    # def sim_engine_with_pvs(self, sim_engine):
+    #     ao = pc.AcceleratorOptions(connection_settings=ConnectionOptions(network='dummy'))
+    #     acc = pc.Accelerator(options=ao, ctx=sim_engine)
+    #     pv_settings = PVOptions(name='DEVICE:A', low=0.0, high=5.0,
+    #                             security=PVAccess.READWRITE)
+    #     pv = SimPV(pv_settings)
+    #     pv_settings = PVOptions(name='DEVICE:B', low=0.0, high=5.0,
+    #                             security=PVAccess.READWRITE)
+    #     pv2 = SimPV(pv_settings)
+    #     pv_settings = PVOptions(name='DEVICE:C', low=0.0, high=5.0,
+    #                             security=PVAccess.READONLY)
+    #     pv3 = SimPV(pv_settings)
+    #     acc.add_pv_object([pv, pv2, pv3])
+    #     return sim_engine, acc, pv, pv2, pv3
+
+    def test_pv_sim(self, sim_engine_with_models: SimulationEngine):
         ao = pc.AcceleratorOptions(connection_settings=ConnectionOptions(network='dummy'))
-        acc = pc.Accelerator(options=ao, ctx=sim_engine)
-        pv_settings = PVOptions(name='TEST:CHANNEL:A', low=0.0, high=5.0,
-                                security=PVAccess.READWRITE)
+        acc = pc.Accelerator(options=ao, ctx=sim_engine_with_models)
+        acc.TRACE = True
+        pv_settings = PVOptions(name='DEVICE:A', low=0.0, high=5.0,
+                                security=PVAccess.RW)
         pv = SimPV(pv_settings)
-        pv_settings = PVOptions(name='TEST:CHANNEL:B', low=0.0, high=5.0,
-                                security=PVAccess.READWRITE)
+        pv_settings = PVOptions(name='DEVICE:B', low=0.0, high=5.0,
+                                security=PVAccess.RW)
         pv2 = SimPV(pv_settings)
 
         acc.add_pv_object([pv])
-        assert acc.pv_names == ['TEST:CHANNEL:A']
+        assert acc.pv_names == ['DEVICE:A']
         acc.add_pv_object([pv2])
-        assert acc.pv_names == ['TEST:CHANNEL:A', 'TEST:CHANNEL:B']
-        assert acc.cm.subscribed_pv_names == ['TEST:CHANNEL:A', 'TEST:CHANNEL:B']
+        assert acc.pv_names == ['DEVICE:A', 'DEVICE:B']
+        assert acc.cm.subscribed_pv_names == ['DEVICE:A', 'DEVICE:B']
 
         r = pv.read()
         assert r == 0.5
@@ -322,8 +108,8 @@ class TestSimPV:
             # too high
             pv.write(6.0)
 
-        pv_settings = PVOptions(name='TEST:CHANNEL:C', low=0.0, high=5.0,
-                                security=PVAccess.READONLY, monitor=False)
+        pv_settings = PVOptions(name='DEVICE:C', low=0.0, high=5.0,
+                                security=PVAccess.RO, monitor=False)
         pv3 = SimPV(pv_settings)
         acc.add_pv_object([pv3])
 
@@ -333,20 +119,61 @@ class TestSimPV:
         with pytest.raises(SecurityError):
             pv3.write(2.6)
 
-        time.sleep(0.1)
-        for ch in ['TEST:CHANNEL:A', 'TEST:CHANNEL:B']:
-            assert acc.cm.last_results_map[ch] is not None, ch
+        for ch in ['DEVICE:A']:
+            assert acc.cm.last_results_map[ch] is not None
 
-        assert acc.cm.last_results_map['TEST:CHANNEL:C'] is None
+        for ch in ['DEVICE:B', 'DEVICE:C']:
+            assert acc.cm.last_results_map[ch] is None
 
-    def test_interlock_simple(self, sim_engine_with_pvs):
-        sim_engine, acc, pv, pv2, pv3 = sim_engine_with_pvs
+        dB = sim_engine_with_models.devices_map['DEVICE:B']
+        sim_engine_with_models.push_full_update_to_device(dB)
 
-        from pybeamtools.controls.interlocks import LimitInterlock, LimitInterlockOptions
-        interlock_limits = {'TEST:CHANNEL:A': (-1.0, 1.0),
-                            'TEST:CHANNEL:B': (-1.0, None),
-                            'TEST:CHANNEL:C': (-1.0, 1.0)}
-        pv_list = ['TEST:CHANNEL:A', 'TEST:CHANNEL:B', 'TEST:CHANNEL:C']
+        dC = sim_engine_with_models.devices_map['DEVICE:C']
+        sim_engine_with_models.push_full_update_to_device(dC)
+
+        for ch in ['DEVICE:B']:
+            assert acc.cm.last_results_map[ch] is not None
+
+        for ch in ['DEVICE:C']:
+            assert acc.cm.last_results_map[ch] is None
+
+    @pytest.fixture
+    def sim_engine_with_dummy_pvs(self, sim_engine_with_models):
+        ao = pc.AcceleratorOptions(connection_settings=ConnectionOptions(network='dummy'))
+        acc = pc.Accelerator(options=ao, ctx=sim_engine_with_models)
+        pv_dict = {}
+
+        for pvn in ['DEVICE:A', 'DEVICE:B']:
+            pv_settings = PVOptions(name=pvn, low=0.0, high=5.0,
+                                    security=PVAccess.RW)
+            pv = SimPV(pv_settings)
+            acc.add_pv_object([pv])
+            pv_dict[pvn] = pv
+
+            dev = sim_engine_with_models.devices_map[pvn]
+            sim_engine_with_models.push_full_update_to_device(dev)
+
+        for pvn in ['DEVICE:C']:
+            pv_settings = PVOptions(name=pvn, low=0.0, high=5.0,
+                                    security=PVAccess.RO)
+            pv = SimPV(pv_settings)
+            acc.add_pv_object([pv])
+            pv_dict[pvn] = pv
+
+            dev = sim_engine_with_models.devices_map[pvn]
+            sim_engine_with_models.push_full_update_to_device(dev)
+
+        return sim_engine_with_models, acc, pv_dict
+
+    def test_interlock_simple(self, sim_engine_with_dummy_pvs):
+        sim_engine, acc, pv_dict = sim_engine_with_dummy_pvs
+
+        interlock_limits = {'DEVICE:A': (-1.0, 1.0),
+                            'DEVICE:B': (-1.0, None),
+                            'DEVICE:C': (-1.0, 1.0)
+                            }
+        pv_list = ['DEVICE:A', 'DEVICE:B', 'DEVICE:C']
+        pv1, pv2, pv3 = [pv_dict[x] for x in pv_list]
         lopt = LimitInterlockOptions(pv_list=pv_list,
                                      read_events=[],
                                      write_events=pv_list,
@@ -357,20 +184,92 @@ class TestSimPV:
         with pytest.raises(SecurityError):
             pv3.write(2.6)
 
-        assert acc.cm.last_results_map['TEST:CHANNEL:B'] is None
-        time.sleep(0.51)
-        assert acc.cm.last_results_map['TEST:CHANNEL:B'] is not None
-        assert acc.cm.last_results_map['TEST:CHANNEL:C'] is not None, acc.cm.last_results_map
+        assert acc.cm.last_results_map['DEVICE:B'] is not None
+        assert acc.cm.last_results_map['DEVICE:C'] is not None, acc.cm.last_results_map
 
         with pytest.raises(InterlockWriteError):
-            pv.write(1.4)
+            pv1.write(1.4)
 
         with pytest.raises(InterlockWriteError):
             pv2.write(-1.4)
 
-        print(ilock.__dict__)
+        #print(ilock.__dict__)
         pv2.write(1.4)
 
-        assert sim_engine.read_channel('TEST:CHANNEL:B') == 1.4
+        assert sim_engine.read_channel('DEVICE:B') == 1.4
 
         acc.pm.stop_interlock(ilock)
+        time.sleep(0.1)
+        pid = acc.pm.id_map[ilock.uuid]
+        p, queue_out, queue_in, interlock = acc.pm.queue_map[pid]
+        assert p.exitcode == -15
+
+    @pytest.fixture
+    def sim_engine_with_dummy_pvs_rb(self, sim_engine_with_models):
+        ao = pc.AcceleratorOptions(connection_settings=ConnectionOptions(network='dummy'))
+        acc = pc.Accelerator(options=ao, ctx=sim_engine_with_models)
+        pv_dict = {}
+
+        for pvn in ['DEVICE:A', 'DEVICE:B']:
+            pv_settings = PVOptions(name=pvn, low=0.0, high=5.0,
+                                    security=PVAccess.RW)
+            pv = SimPV(pv_settings)
+            acc.add_pv_object([pv])
+            pv_dict[pvn] = pv
+
+        for pvn in ['DEVICE:A_RB', 'DEVICE:B_RB']:
+            pv_settings = PVOptions(name=pvn, security=PVAccess.RO)
+            pv = SimPV(pv_settings)
+            acc.add_pv_object([pv])
+            pv_dict[pvn] = pv
+
+        for pvn in ['DEVICE:A', 'DEVICE:B']:
+            dev = sim_engine_with_models.devices_map[pvn]
+            sim_engine_with_models.push_full_update_to_device(dev)
+
+        for pvn in ['DEVICE:C']:
+            pv_settings = PVOptions(name=pvn, security=PVAccess.RO)
+            pv = SimPV(pv_settings)
+            acc.add_pv_object([pv])
+            pv_dict[pvn] = pv
+
+            dev = sim_engine_with_models.devices_map[pvn]
+            sim_engine_with_models.push_full_update_to_device(dev)
+
+        return sim_engine_with_models, acc, pv_dict
+
+    def test_acc_rb(self, sim_engine_with_dummy_pvs_rb):
+        sim_engine, acc, pv_dict = sim_engine_with_dummy_pvs_rb
+        pv_list = ['DEVICE:A', 'DEVICE:A_RB', 'DEVICE:B', 'DEVICE:B_RB', 'DEVICE:C']
+        pv1, pv1rb, pv2, pv2rb, pv3 = [pv_dict[x] for x in pv_list]
+
+        for pv in pv_list:
+            assert acc.cm.last_results_map[pv] is not None
+
+        assert set(acc.pv_names) == set(pv_list)
+        assert set(acc.cm.subscribed_pv_names) == set(pv_list)
+
+        r = pv1.read()
+        assert r == 0.5
+        assert pv1rb.read() == 0.5
+
+        r = pv1.write(1.3)
+        assert r is not None
+        r = pv1.read()
+        assert r == 1.3
+        assert pv1rb.read() == 1.3
+
+        with pytest.raises(ControlLibException):
+            # too high
+            pv1.write(6.0)
+        assert pv1.read() == 1.3
+        assert pv1rb.read() == 1.3
+
+    def test_acc_time(self, sim_engine_with_dummy_pvs_rb):
+        sim_engine, acc, pv_dict = sim_engine_with_dummy_pvs_rb
+        pv_list = ['DEVICE:A', 'DEVICE:A_RB', 'DEVICE:B', 'DEVICE:B_RB', 'DEVICE:C']
+        pv1, pv1rb, pv2, pv2rb, pv3 = [pv_dict[x] for x in pv_list]
+
+
+
+

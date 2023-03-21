@@ -1,11 +1,11 @@
 import datetime
+import time
 from pathlib import Path
-import pytz
-import glob
 from typing import List, Union
+
 import numpy as np
 import pandas as pd
-import time
+import pytz
 
 APS_TZ = pytz.timezone('America/Chicago')
 SNAPSHOT_DIR = Path('/home/helios/oagData/SCR/snapshots')

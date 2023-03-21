@@ -10,6 +10,10 @@ class InterlockWriteError(ControlLibException):
     pass
 
 
+class InterlockTimeoutError(ControlLibException):
+    pass
+
+
 class InvalidWriteError(ControlLibException):
     pass
 

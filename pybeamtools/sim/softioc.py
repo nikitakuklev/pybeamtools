@@ -1,6 +1,7 @@
 import asyncio
 import functools
 import logging
+import multiprocessing
 from asyncio import AbstractEventLoop
 from threading import Thread
 from typing import Any, Optional
@@ -33,15 +34,62 @@ class SimController:
         return self.eval_fn(name)
 
 
+class SoftIOC:
+    def __init__(self):
+        self.pvdb = None
+
+    def ping(self):
+        logger.info(f'Pong')
+        return 'pong'
+
+    def run(self):
+        nest_asyncio.apply()
+        logger.info('Starting loop')
+        run(self.pvdb, log_pv_names=True, interfaces=['127.0.0.1'])
+
+    def run_in_current_loop(self):
+        logger.info('Starting in current loop')
+        run(self.pvdb, log_pv_names=True, interfaces=['127.0.0.1'])
+
+    def run_in_background(self, daemon=True):
+        def start_background_loop(loop: asyncio.AbstractEventLoop) -> None:
+            self.loop = loop = asyncio.new_event_loop()
+            loop.set_debug(True)
+            asyncio.set_event_loop(loop)
+            logger.info(f'Starting loop {loop=}')
+            run(self.pvdb, log_pv_names=True,
+                interfaces=['127.0.0.1'])
+
+        t = Thread(daemon=daemon, target=start_background_loop, args=(None,))
+        logger.info(f'Starting thread {t=}')
+        t.start()
+        return t
+
+    def process_task(self, loop: asyncio.AbstractEventLoop) -> None:
+        loop = asyncio.new_event_loop()
+        loop.set_debug(True)
+        asyncio.set_event_loop(loop)
+        logger.info(f'Starting loop {loop=}')
+        run(self.pvdb, log_pv_names=True,
+            interfaces=['127.0.0.1'])
+
+    def run_in_process(self):
+        process = multiprocessing.Process(target=self.process_task)
+        process.daemon = True
+        logger.info(f'Starting process {process=}')
+        process.start()
+        logger.info(f'Started process {process=}')
+
+
 class SimpleIOC:
     def __init__(self,
                  variables: list[str],
                  objectives: list[str],
                  test_variables=None,
-                 prefix: str = 'AI:',
+                 # prefix: str = 'AI:',
                  noise=None
                  ):
-        self.prefix = prefix
+        # self.prefix = prefix
         self.variables = variables
         self.objectives = objectives
         self.test_variables = test_variables
@@ -84,12 +132,20 @@ class SimpleIOC:
             logger.debug(f"Read {value} from PV {instance.name}")
             return value
 
+        async def get_setp_handler(instance: T_contra, *args):
+            logger.debug(f'ai_setp_getter {instance=}')
+            if len(args) > 0:
+                raise
+            value = self.device_dir[instance.name].setpoint
+            logger.debug(f"Read {value} from PV {instance.name}")
+            return value
+
         async def startup_handler(instance: T_contra, async_lib: AsyncLibraryLayer, *args):
             logger.info(f'Startup for {instance.name=}')
             dev = self.device_dir[instance.name]
             try:
                 while True:
-                    await async_lib.sleep(5)
+                    await async_lib.sleep(2)
                     value = dev.read()
                     logger.info(f'Update for {instance.name=} = {value}')
                     await instance.write(value, verify_value=False)  #
@@ -101,23 +157,25 @@ class SimpleIOC:
         all_specs = []
         self.input_names = []
         for i, el in enumerate(self.variables):
-            mag = RealisticMagnet(name=el, value=0.0, low=-2.0, high=2.0, noise=self.noise,
-                                  resolution=None, model='instant')
-            pv_ai = pvproperty(name=el + ':AI', value=mag.value,
-                               record='ai', get=get_handler, put=var_put_handler,
-                               upper_ctrl_limit=2.0, lower_ctrl_limit=-2.0,
+            mag = RealisticMagnet(name=el, value=0.0, low=-5.0, high=5.0, noise=self.noise,
+                                  resolution=None, model='exponential', model_kwargs={
+                    'decay_constant': 0.03
+                })
+            pv_ai = pvproperty(name=el, value=mag.setpoint,
+                               record='ai', get=get_setp_handler, put=var_put_handler,
+                               upper_ctrl_limit=5.0, lower_ctrl_limit=-5.0,
                                dtype=PvpropertyDouble)
-            pv_ao = pvproperty(name=el + ':AO', value=mag.value,
+            pv_ao = pvproperty(name=el + '_RB', value=mag.value,
                                record='ao', get=get_handler,
                                startup=startup_handler, read_only=True,
                                dtype=PvpropertyDouble)
             all_specs.append(pv_ai)
             all_specs.append(pv_ao)
-            self.device_dir[el + ':AI'] = mag
-            self.device_dir[el + ':AO'] = mag
+            self.device_dir[el] = mag
+            self.device_dir[el + '_RB'] = mag
             # self.pvprops_dict[el+':AI'] = pv_ai
             # self.pvprops_dict[el + ':AO'] = pv_ao
-            self.input_names.append(el + ':AI')
+            self.input_names.append(el)
 
         for i, el in enumerate(self.objectives):
             output = StaticInputDevice(name=el, value=1.0)
@@ -125,6 +183,7 @@ class SimpleIOC:
                                 record='ao',
                                 get=get_handler,
                                 read_only=True,
+                                startup=startup_handler,
                                 dtype=PvpropertyDouble)
             all_specs.append(pv_out)
             self.device_dir[el] = output
@@ -173,13 +232,19 @@ class SimpleIOC:
     def run(self):
         nest_asyncio.apply()
         logger.info('Starting loop')
-        run(self.pvdb, log_pv_names=True, interfaces=['0.0.0.0'])
+        run(self.pvdb, log_pv_names=True,
+            # interfaces=['0.0.0.0']
+            interfaces=['127.0.0.1']
+            )
 
     def run_in_background(self, daemon=True):
         def start_background_loop(loop: asyncio.AbstractEventLoop) -> None:
             asyncio.set_event_loop(loop)
             logger.info('Starting loop in separate thread')
-            run(self.pvdb, log_pv_names=True, interfaces=['0.0.0.0'])
+            run(self.pvdb, log_pv_names=True,
+                interfaces=['0.0.0.0']
+                # interfaces=['127.0.0.1']
+                )
 
         loop = asyncio.new_event_loop()
         t = Thread(daemon=daemon, target=start_background_loop, args=(loop,))
@@ -358,10 +423,11 @@ class AsyncioQueue:
                 self._queue.put(value), self._loop)
 
 
-class EchoIOC:
+class EchoIOC(SoftIOC):
     """ Soft IOC that mirror SE values """
 
     def __init__(self, channels: list[str], sim_engine: SimulationEngine):
+        super().__init__()
         self.se = sim_engine
         self.channels = channels
         self.pvspecs: list[PVSpec] = []
@@ -378,14 +444,16 @@ class EchoIOC:
         async def ai_getter(group, instance, channel):
             # value = group.device.read()
             value = self.se.read_channel(channel)
-            logger.info(f'ai_getter {group=} {instance.pvname=}: {value=} {channel=}')
-            return None
+            logger.info(f'ai_getter {instance.pvname=}: {value=} {channel=} {group=} ')
+            return value
 
         async def ai_putter(group, instance, value, channel):
             # value = group.device.read()
-            logger.info(f'ai_writer {group=} {instance.pvname=}: {value=} {channel=}')
+            logger.info(f'ai_writer {instance.pvname=}: {value=} {channel=} {group=} ')
             try:
                 self.se.write_channel(channel, value)
+                # skip official write since callback will do it
+                # return SkipWrite
             except Exception:
                 # TODO: add more logging
                 # raise SkipWrite
@@ -416,10 +484,12 @@ class EchoIOC:
             props = {}
             # self.queues[channel] = async_q = AsyncioQueue(self.loop)
             updater = functools.partial(async_updater, channel=ch, q=self)
+            value = self.se.read_channel(channel)
+            assert isinstance(value, float)
             props[f'property_{j}'] = pvproperty(record='ai',
                                                 doc=f'echo_{i}',
                                                 name=ch,
-                                                value=0.0,
+                                                value=value,
                                                 dtype=PvpropertyDouble,
                                                 get=functools.partial(ai_getter, channel=ch),
                                                 put=functools.partial(ai_putter, channel=ch),
@@ -451,11 +521,12 @@ class EchoIOC:
         # logger.info(f'Channels: {self.channels}')
         # logger.info(f'BL dict 2: {bl.__dict__}')
         # logger.info(f'PVDB: {bl.pvdb}')
+        self.pvdb = bl.pvdb
 
     def send_updates(self, channel, data):
         # logger.info(f'Pong')
         assert channel in self.channels
-        logger.info(f'Sending {data=} to echo channel {channel=}')
+        logger.info(f'EchoIOC sending {data=} to echo channel {channel=}')
         q = self.queues[channel]
         q.put(data)
         # self.loop.call_soon_threadsafe(q._queue.put_nowait, data)
@@ -469,24 +540,140 @@ class EchoIOC:
         q = self.queues[channel]
         q.put({'op': 'status', 'data': status})
 
-    def ping(self):
-        logger.info(f'Pong')
-        return 'pong'
 
-    def run(self):
-        nest_asyncio.apply()
-        logger.info('Starting loop')
-        run(self.bl.pvdb, log_pv_names=True, interfaces=['0.0.0.0'])
+class EchoIOCV2(SoftIOC):
+    """ Soft IOC that mirror SE values """
 
-    def run_in_background(self, daemon=True):
-        def start_background_loop(loop: asyncio.AbstractEventLoop) -> None:
-            self.loop = loop = asyncio.new_event_loop()
-            loop.set_debug(True)
-            asyncio.set_event_loop(loop)
-            logger.info(f'Starting loop {loop=}')
-            run(self.bl.pvdb, log_pv_names=True, interfaces=['127.0.0.1'])  #
-            # loop.run_forever()
+    def __init__(self, channels: list[str], sim_engine: SimulationEngine):
+        super().__init__()
+        self.se = sim_engine
+        self.channels = channels
+        self.pvspecs: list[PVSpec] = []
+        self.queues = {}
+        for ch in channels:
+            assert ch in self.se.channels
 
-        t = Thread(daemon=daemon, target=start_background_loop, args=(None,))
-        logger.info(f'Starting thread {t=}')
-        t.start()
+    def setup(self):
+        logger.info(f'Setting up echo IOC with channels {self.channels}')
+
+        # async def var_put_handler(instance: T_contra, value: Any, *args):
+        #     logger.debug(f'ai_writer {instance=} {value=}')
+        #     if len(args) > 0:
+        #         raise
+        #     dev = self.device_dir[instance.name]
+        #     logger.debug(f"Writing device {dev} -> {value}")
+        #     dev.write(value)
+        #     for obj in self.objectives:
+        #         val = get_objectives(obj)
+        #         logger.debug(f"Writing {obj} -> {val}")
+        #         dev = self.device_dir[obj]
+        #         dev.write(val)
+        #         # logger.debug(f"Propagating {obj} to PV")
+        #         # await self.pvprops_dict[obj].write(val)
+        #         await self.pvdb[obj].write(val, verify_value=False)
+        #
+        # # async def obj_put_handler(instance: T_contra, value: Any, *args):
+        # #     logger.debug(f'objective writer {instance=} {value=}')
+        # #     dev = self.device_dir[instance.name]
+        # #     logger.debug(f'writing {dev=} -> {value=}')
+        # #     dev.write(value)
+        #
+        # async def get_handler(instance: T_contra, *args):
+        #     logger.debug(f'ai_getter {instance=}')
+        #     if len(args) > 0:
+        #         raise
+        #     value = self.device_dir[instance.name].read()
+        #     logger.debug(f"Read {value} from PV {instance.name}")
+        #     return value
+        #
+        # async def get_setp_handler(instance: T_contra, *args):
+        #     logger.debug(f'ai_setp_getter {instance=}')
+        #     if len(args) > 0:
+        #         raise
+        #     value = self.device_dir[instance.name].setpoint
+        #     logger.debug(f"Read {value} from PV {instance.name}")
+        #     return value
+        #
+        # async def startup_handler(instance: T_contra, async_lib: AsyncLibraryLayer, *args):
+        #     logger.info(f'Startup for {instance.name=}')
+        #     dev = self.device_dir[instance.name]
+        #     try:
+        #         while True:
+        #             await async_lib.sleep(2)
+        #             value = dev.read()
+        #             logger.info(f'Update for {instance.name=} = {value}')
+        #             await instance.write(value, verify_value=False)  #
+        #     except Exception as ex:
+        #         logger.error(f'{instance.name=} exception {ex}')
+        #     finally:
+        #         logger.warning(f'{instance.name=} is exiting')
+
+        async def ai_getter(instance, *args, channel):
+            value = self.se.read_channel(channel)
+            logger.info(f'ai_getter {instance.pvname=}: {value=} {channel=} {instance=}')
+            # Does not work since does not update data without triggering subs
+            #instance.write(value, verify_value=False)
+            # Trick caproto to directly modify ChannelData, it will be returned by _read
+            instance._data['value'] = value
+            # Return none to avoid putter call
+            return None
+
+        async def ai_putter(instance, value, *args, channel):
+            logger.info(f'ai_writer {instance.pvname=}: {value=} {channel=} {instance=}')
+            try:
+                self.se.write_channel(channel, value)
+                # skip official write since callback will do it
+                # return SkipWrite
+            except Exception:
+                # TODO: add more logging
+                raise SkipWrite
+                #raise
+            return None
+
+        async def async_updater(instance, async_lib, *args, channel, q):
+            logger.info(f'SoftIOC updater for {channel=} starting')
+            try:
+                async_q = AsyncioQueue(asyncio.get_running_loop())
+                q.queues[channel] = async_q
+                while True:
+                    # async_q = AsyncioQueue(asyncio.get_running_loop())
+                    # q.queues[channel] = async_q
+                    # logger.info(f'SoftIOC updater for {channel=} starting 2')
+                    data = await async_q.async_get()
+                    logger.debug(f'SoftIOC updater for {channel=} received {data=}')
+                    await instance.write(data, verify_value=False)
+            except Exception as ex:
+                logger.error(f'SoftIOC {channel=} exception {ex}')
+            finally:
+                logger.warning(f'Updater for {channel=} is exiting')
+
+        props = []
+        for i, channel in enumerate(self.channels):
+            value = self.se.read_channel(channel)
+            assert isinstance(value, float), f'Invalid value {value} for channel {channel}'
+            props.append(pvproperty(record='ai',
+                                    doc=f'echo_{i}',
+                                    name=channel,
+                                    value=value,
+                                    dtype=PvpropertyDouble,
+                                    get=functools.partial(ai_getter, channel=channel),
+                                    put=functools.partial(ai_putter, channel=channel),
+                                    startup=functools.partial(async_updater, channel=channel, q=self)))
+
+        pvdb = {pvspec.pvspec.name: pvspec.pvspec.create(group=None) for pvspec in props}
+        self.pvdb = pvdb
+
+    def send_updates(self, channel: str, data: float):
+        assert isinstance(data, float)
+        #assert len(data) > 0
+        assert channel in self.channels
+        logger.info(f'EchoIOC sending {data=} to {channel=}')
+        q = self.queues[channel]
+        q.put(data)
+
+    def set_failure_status(self, channel, status):
+        assert channel in self.channels
+        assert isinstance(status, bool)
+        logger.info(f'Channel {channel} set failure to {status}')
+        q = self.queues[channel]
+        q.put({'op': 'status', 'data': status})

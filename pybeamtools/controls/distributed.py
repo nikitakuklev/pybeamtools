@@ -1,16 +1,15 @@
+import logging
 import multiprocessing
 import os
 import queue
 import random
+import time
 import traceback
-from multiprocessing import Process, Queue
-import logging
-import threading
 from multiprocessing.process import BaseProcess
 
 from .errors import ControlLibException, WrappedException
 from .interlocks import Interlock
-from ..utils.logging import setup_worker_logging, LogManager
+from ..utils.logging import LogManager, setup_worker_logging
 
 
 def interlock_worker_loop(log_queue: multiprocessing.Queue,
@@ -19,6 +18,7 @@ def interlock_worker_loop(log_queue: multiprocessing.Queue,
                           i: Interlock):
     setup_worker_logging(q=log_queue)
     logger = logging.getLogger(__name__)
+    logger.info(f'Hello from PID {os. getpid()}')
 
     while True:
         try:
@@ -41,6 +41,7 @@ def interlock_worker_loop(log_queue: multiprocessing.Queue,
                                data=response)
             queue_in.put(resp)
         except Exception as ex:
+            logger.info(f'Fatal exception handling msg: {ex=} ')
             tb = traceback.format_exc()
             we = WrappedException()
             we.ex = ex
@@ -77,7 +78,7 @@ class ProcessManager:
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def start_new_worker(self, f, *args) -> BaseProcess:
-        p = self.ctx.Process(target=f, args=args)
+        p = self.ctx.Process(target=f, args=args, daemon=True)
         p.start()
         return p
 
@@ -101,6 +102,8 @@ class ProcessManager:
         self.process_map[interlock.uuid] = p
         self.id_map[interlock.uuid] = p.pid
         self.counter += 1
+        time.sleep(0.01)
+        assert p.exitcode is None
 
     def stop_interlock(self, interlock: Interlock):
         pid = self.id_map[interlock.uuid]
@@ -114,14 +117,14 @@ class ProcessManager:
             if i.uuid not in self.id_map:
                 raise KeyError(f'Interlock ID not recognized')
             if self.id_map[i.uuid] not in self.queue_map:
-                raise KeyError(f'Interlock internal failure')
+                raise Exception(f'Interlock internal failure')
             if self.queue_map[self.id_map[i.uuid]][0].exitcode is not None:
-                raise ControlLibException(f'Interlock process_read terminated unexpectedly with code ({self.queue_map[self.id_map[i.uuid]][0].exitcode})')
+                raise ControlLibException(f'Interlock terminated unexpectedly with code ({self.queue_map[self.id_map[i.uuid]][0].exitcode})')
 
         for i, v in zip(interlocks_list, data_list):
             pid = self.id_map[i.uuid]
             p, queue_out, queue_in, interlock = self.queue_map[pid]
-            msg = RPCMessage(counter=random.randint(0, 1000000), uuid=i.uuid, mode='write', data=v)
+            msg = RPCMessage(counter=random.randint(0, 10000000), uuid=i.uuid, mode='write', data=v)
             queue_out.put(msg)
             self.last_message_id[i.uuid] = msg.counter
             self.logger.debug(f'Sent message {msg.data} (id {msg.counter}) to interlock ({i.uuid})')
@@ -152,7 +155,16 @@ class ProcessManager:
 
         return responses
 
-    def ping(self, pid: int, timeout=1.0):
+    def verify_functionality(self, ilock: Interlock):
+        pid = self.id_map[ilock.uuid]
+        pong = self.ping(pid)
+        #self.logger.debug(f'Pong response: {pong}')
+        assert isinstance(pong, RPCResponse)
+        assert pong.mode == 'response'
+        assert pong.data == 'pong'
+
+    def ping(self, pid: int, timeout=10.0):
         p, queue_out, queue_in, interlock = self.queue_map[pid]
-        queue_out.put((random.randint(0, 1000000), 'ping'))
+        msg = RPCMessage(counter=random.randint(0, 10000000), uuid=None, mode='ping', data=None)
+        queue_out.put(msg)
         return queue_in.get(timeout=timeout)

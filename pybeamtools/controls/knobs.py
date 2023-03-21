@@ -1,6 +1,5 @@
-import inspect
+from pydantic import BaseModel
 
-from pydantic import BaseModel, create_model
 from ..utils.pydantic import CallableModel, PBClass
 
 
@@ -9,9 +8,6 @@ class KnobOptions(BaseModel):
     readback_pv_name: str
     # standard equality will be used if not
     tolerance_fun: CallableModel = None
-
-
-
 
 
 class Knob(PBClass):

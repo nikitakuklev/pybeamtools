@@ -1,14 +1,10 @@
 import json
-
-import json
 import time
 import uuid
 from abc import abstractmethod
 from enum import Enum
 from typing import Optional, Union
 
-import caproto
-import caproto.threading.client
 from pydantic import BaseModel
 
 from .errors import ControlLibException, InvalidWriteError, SecurityError
@@ -18,9 +14,9 @@ __all__ = ['SimPV', 'EPICSPV', 'PVAccess', 'PVOptions']
 
 
 class PVAccess(Enum):
-    READONLY = 1
+    RO = 1
     #    WRITE = 2
-    READWRITE = 3
+    RW = 3
 
 
 class WriteResponse:
@@ -34,9 +30,9 @@ class PVOptions(BaseModel):
     low: Union[float, int] = None
     high: Union[float, int] = None
     monitor: bool = True
-    security: PVAccess = PVAccess.READONLY
+    security: PVAccess = PVAccess.RO
     read_timeout: float = 2.0
-    write_timeout: float = 5.0
+    write_timeout: float = None
 
     class Config:
         extra = 'forbid'
@@ -87,7 +83,7 @@ class EPICSPV(PV):
         super().__init__(options)
 
     @property
-    def caproto(self) -> Optional[caproto.threading.client.PV]:
+    def caproto(self):# -> Optional[caproto.threading.client.PV]:
         if self.cm is None:
             return None
         else:
@@ -107,7 +103,7 @@ class EPICSPV(PV):
               timeout=None, notify=None, data_type=None, data_count=None
               ):
         # Check access
-        if self.options.security != PVAccess.READWRITE.value:
+        if self.options.security != PVAccess.RW.value:
             raise SecurityError(f'Writes on PV {self.name} are forbidden')
         # Propose a write - any issues will raise an Exception
         self.cm.acc.propose_writes([self.name], [data])
@@ -136,7 +132,7 @@ class SimPV(PV):
         if not isinstance(data, (int, float, str)):
             raise InvalidWriteError(f'Data {data} is not of valid type')
         # Check access
-        if self.options.security != PVAccess.READWRITE.value:
+        if self.options.security != PVAccess.RW.value:
             raise SecurityError(f'Write on PV ({self.name}) forbidden by access mask')
         # Propose a write - any issues will raise an Exception
         self.cm.acc.propose_writes([self.name], [data])

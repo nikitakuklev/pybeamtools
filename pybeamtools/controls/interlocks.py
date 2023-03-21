@@ -5,8 +5,7 @@ import uuid
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
-import pandas as pd
-from pydantic import BaseModel, ValidationError, Field, validator, root_validator, NonNegativeInt, NonNegativeFloat
+from pydantic import BaseModel, NonNegativeFloat, NonNegativeInt, root_validator, validator
 
 from .errors import ControlLibException
 
@@ -49,7 +48,7 @@ class Interlock(ABC):
             for pv in options.write_events:
                 if pv not in options.pv_list:
                     raise InterlockInternalError(f'PV {pv} subscription requested but not in PV list')
-        self.uuid = uuid.uuid4()
+        self.uuid = uuid.uuid4().hex[:12]
 
     @abstractmethod
     def callback_read(self, trigger_pvs, data, timestamps):
@@ -104,6 +103,8 @@ class LimitInterlockOptions(InterlockOptions):
 
 
 class LimitInterlock(Interlock):
+    options: LimitInterlockOptions
+
     def __init__(self, options: LimitInterlockOptions):
         # pv_list = options.pv_list
         # limits = options.limits
@@ -154,8 +155,8 @@ class LimitInterlock(Interlock):
                 else:
                     raise Exception(f'PV ({pv_name}) encountered that was not declared')
         except Exception as ex:
-            if not isinstance(ex, InterlockInternalError):
-                self.logger.error(f'Unexpected exception ({ex})')
+            #if not isinstance(ex, InterlockInternalError):
+            #    self.logger.error(f'Unexpected exception ({ex})')
             return {'result': False, 'ex': ex, 'reason': 'ex'}
         return {'result': True, 'ex': None, 'reason': None}
 
@@ -178,7 +179,7 @@ class DenyInterlock(Interlock):
     def callback_write(self, trigger_pvs: list[str], data: dict[str, Any], timestamps):
         assert isinstance(data, dict) and all(isinstance(x, str) for x in data.keys())
         assert isinstance(trigger_pvs, list) and all(isinstance(x, str) for x in trigger_pvs)
-        self.logger.debug(f'Interlock ({self.uuid}) write callback evaluation with {self.options} {data}')
+        self.logger.debug(f'Interlock ({self.uuid}) write input_var_change_callback evaluation with {self.options} {data}')
         return {'result': False, 'ex': None, 'reason': None}
 
 
@@ -207,7 +208,7 @@ class RatelimitInterlock(Interlock):
         assert isinstance(trigger_pvs, dict)
         assert all(isinstance(x, str) for x in trigger_pvs.keys())
         assert set(data.keys()) == set(self.options.pv_list)
-        self.logger.debug(f'Interlock ({self.uuid}) write callback evaluation with {self.options} {data}')
+        self.logger.debug(f'Interlock ({self.uuid}) write input_var_change_callback evaluation with {self.options} {data}')
         now = time.time()
         if self.time_start + self.options.min_delay < now:
             # allow
