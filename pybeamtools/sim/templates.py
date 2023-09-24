@@ -16,6 +16,7 @@ class MockSetupPairDevice:
     def __init__(self,
                  variables: list[str] = None,
                  objectives: list[str] = None,
+                 constraints: list[str] = None,
                  readbacks: list[str] = None,
                  constants: list[str] = None,
                  extra_vars: list[str] = None,
@@ -31,12 +32,13 @@ class MockSetupPairDevice:
                  ):
         assert variables is not None
         assert objectives is not None
-        self.variables = variables  # or ['X0', 'X1']
+        self.variables = variables
         self.variables_initial_values = variables_initial_values or {}
         if not set(self.variables_initial_values).issubset(set(self.variables)):
             raise ValueError(f'Bad initial values {self.variables_initial_values}')
-        self.readbacks = readbacks  # or ['X0_RB', 'X1_RB']
-        self.objectives = objectives  # or ['OBJ0']
+        self.readbacks = readbacks
+        self.objectives = objectives
+        self.constraints = constraints if constraints is not None else []
         self.constants = constants if constants is not None else []
         self.extra_vars = extra_vars if extra_vars is not None else []
         self.models_dict: dict[str, Any] = {}
@@ -45,14 +47,19 @@ class MockSetupPairDevice:
         self.noise = noise
         self.default_fun = lambda: Quadratic(n_var=len(variables))
 
-        if evaluation_functions is None:
-            evaluation_functions = {o: Quadratic(n_var=len(variables)) for o in objectives}
+        evaluation_functions = evaluation_functions or {}
+        for o in objectives:
+            if o not in evaluation_functions:
+                evaluation_functions[o] = Quadratic(n_var=len(variables))
+        for el in constraints:
+            if el not in evaluation_functions:
+                evaluation_functions[o] = Quadratic(n_var=len(variables), offset=-2.0)
         assert isinstance(evaluation_functions, dict)
         self.evaluation_fuctions = evaluation_functions
-        if evaluation_variables is None:
-            evaluation_variables = {}
+
+        evaluation_variables = evaluation_variables or {}
         assert isinstance(evaluation_variables, dict)
-        for el in objectives:
+        for el in objectives + constraints:
             if el not in evaluation_variables:
                 evaluation_variables[el] = variables.copy()
         self.evaluation_variables = evaluation_variables
@@ -61,6 +68,7 @@ class MockSetupPairDevice:
         self.last_results: dict[str, Any] = {o: None for o in objectives}
         self.variables_devices: list[EngineDevice] = []
         self.objectives_devices: list[EngineDevice] = []
+        self.constraints_devices: list[EngineDevice] = []
         self.base_names = {}
 
         self.variable_model_kwargs = variable_model_kwargs or {}
@@ -74,6 +82,7 @@ class MockSetupPairDevice:
         logger.info(f'Vars: {self.variables}')
         logger.info(f'Readbacks: {self.readbacks}')
         logger.info(f'Objectives: {self.objectives}')
+        logger.info(f'Constraints: {self.constraints}')
         logger.info(f'Constants: {self.constants}')
         logger.info(f'EVars: {self.evaluation_variables}')
 
@@ -98,7 +107,6 @@ class MockSetupPairDevice:
             # t = sim.time()
         self.ctx = ctx = SignalContext(se=sim)
         self.sim = sim
-        # self.time_fun = fixed_time
 
         model_kwargs = dict(readback_update_rate=0.0)
         model_kwargs.update(self.variable_model_kwargs)
@@ -125,6 +133,13 @@ class MockSetupPairDevice:
             self.devices_dict[el] = g_obj
             self.objectives_devices.append(g_obj)
 
+        for i, el in enumerate(self.constraints):
+            output = StaticInputDevice(name=el, value=1.3)
+            g_obj = self.general_objective_device(el)
+            self.models_dict[el] = output
+            self.devices_dict[el] = g_obj
+            self.constraints_devices.append(g_obj)
+
         constants_devices = []
         for i, c in enumerate(self.constants):
             e = EchoDevice(EchoDeviceOptions(name=c, data={c: 5.0 + i * 10},
@@ -143,13 +158,18 @@ class MockSetupPairDevice:
         for dev in self.objectives_devices:
             sim.add_device(dev)
 
+        for dev in self.constraints_devices:
+            sim.add_device(dev)
+
         for dev in constants_devices:
             sim.add_device(dev)
 
         for dev in extra_channels:
             sim.add_device(dev)
 
-        for dev in self.variables_devices + self.objectives_devices + extra_channels + constants_devices:
+        for dev in self.variables_devices + self.objectives_devices + self.constraints_devices + \
+                extra_channels + \
+                   constants_devices:
             sim.enable_device(dev)
 
         return sim
@@ -176,7 +196,7 @@ class MockSetupPairDevice:
         overrides = overrides or {}
         fun = self.evaluation_fuctions.get(objective, self.default_fun())
 
-        assert objective in self.objectives
+        assert objective in self.objectives or objective in self.constraints
         # gather inputs
         inputs_names = self.evaluation_variables[objective]
         inputs = []
@@ -184,12 +204,13 @@ class MockSetupPairDevice:
             if var in overrides:
                 inputs.append(overrides[var])
             else:
-                inputs.append(self.models_dict[var].value)  # read(self.time_fun())
+                inputs.append(self.models_dict[var].value)
         inputs = np.array(inputs)
         inputs = inputs[None, :]
         assert inputs.shape == (1, len(self.variables))
         logger.info(f'Computing {objective} from {inputs_names}={inputs}')
-        results, constraints = fun.evaluate(inputs)
+
+        results, _ = fun.evaluate(inputs)
         #assert results.shape == (1, len(self.objectives)), f'{results=}'
         assert results.shape == (1, 1), f'{results=}'
         self.last_inputs[objective] = inputs.copy()

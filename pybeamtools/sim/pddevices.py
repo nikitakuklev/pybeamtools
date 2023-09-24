@@ -6,12 +6,11 @@ from enum import Enum, auto
 from functools import total_ordering
 from typing import Any, Callable, Literal, Optional, Union
 
-from pydantic import BaseModel, Extra
+from pydantic import BaseModel, ConfigDict, Extra, Field
 
 from .devices import TimeAwareModel, VirtualDevice
-from .errors import DeviceEnableError, DeviceError, DeviceReadError, DeviceScanError, \
-    DeviceUpdateError, \
-    DeviceWriteError
+from .errors import DeviceReadError, DeviceScanError, \
+    DeviceUpdateError, DeviceWriteError
 from .rpn import RPNCalc
 from ..controls.pv import PVOptions, WriteResponse
 from ..utils.pydantic import JSON_ENCODERS
@@ -56,7 +55,6 @@ class OP(Enum):
     PAUSE = auto()
     UPDATE_PROP = auto()
     UPDATE_PUSH = auto()
-
 
 
 @total_ordering
@@ -127,19 +125,14 @@ class SignalContext:
 
 
 class DeviceOptions(BaseModel):
-    class Config:
-        extra = Extra.forbid
-        json_encoders = JSON_ENCODERS
-        # validate_assignment = True
-        # use_enum_values = True
-
-    name: str
-    scan_period: float = 0.0
-    editable_fields: list[str] = []
+    name: str = Field(description='Device name')
+    scan_period: float = Field(0.0, description='refresh_period')
+    editable_fields: list[str] = Field([])
+    model_config = ConfigDict(extra='forbid')
 
 
 class EngineDevice:
-    device_type = 'device'
+    device_type: str = 'device'
 
     def __init__(self,
                  options: DeviceOptions,
@@ -187,6 +180,9 @@ class EngineDevice:
         self.state = DS.CREATED
         # if ctx is not None:
         #    ctx.add_device(self)
+
+    def __str__(self):
+        return f'{self.device_type} with {self.options=}'
 
     def update(self, ev: Event, aux_dict: dict[str, DataT]) -> dict[str, DataT]:
         self.stats['update'] += 1
@@ -293,7 +289,7 @@ class EchoDeviceOptions(DeviceOptions):
 
 
 class EchoDevice(EngineDevice):
-    device_type = 'echo'
+    device_type: str = 'echo'
 
     def __init__(self, options: EchoDeviceOptions, ctx: SignalContext = None):
         self.options = options
@@ -328,7 +324,7 @@ class EchoDevice(EngineDevice):
         return changed_dict
 
     def _scan_fun(self, ev):
-        #assert self.options.scan_period > 0.0
+        # assert self.options.scan_period > 0.0
         return self.options.data
 
     # def _edit_fun(self, t_run, options_dict):
@@ -345,13 +341,13 @@ class EchoDevice(EngineDevice):
 
 
 class CounterDeviceOptions(DeviceOptions):
-    device_type: Literal['echo'] = 'counter'
+    device_type: Literal['counter'] = 'counter'
     data: dict[str, Any]
     increment_on: list[str] = ['scan']
 
 
-class CounterDevice(EngineDevice, DeviceOptions):
-    DEVICE_TYPE = 'counter'
+class CounterDevice(EngineDevice):
+    device_type: str = 'counter'
     options: CounterDeviceOptions
 
     def __init__(self, options: CounterDeviceOptions, ctx: SignalContext = None):
@@ -401,7 +397,7 @@ class ProxyDeviceOptions(DeviceOptions):
 
 
 class ProxyDevice(EngineDevice):
-    DEVICE_TYPE = 'Proxy'
+    device_type: str = 'Proxy'
     options: ProxyDeviceOptions
 
     def __init__(self, options: ProxyDeviceOptions, ctx: SignalContext = None):
@@ -439,7 +435,7 @@ class ProxyDevice(EngineDevice):
 
 
 class EPICSDeviceOptions(DeviceOptions):
-    device_type: Literal['epics'] = 'epics_ca'
+    device_type: Literal['epics_ca'] = 'epics_ca'
     connection: Literal['dummy', 'epics'] = 'epics'
     pv_to_ch_map: dict[str, str]
     pv_config: PVOptions
@@ -451,7 +447,7 @@ class EPICSDeviceOptions(DeviceOptions):
 
 
 class EPICSDevice(EngineDevice):
-    device_type = 'epics_ca'
+    device_type: str = 'epics_ca'
     options: EPICSDeviceOptions
 
     def __init__(self, options: EPICSDeviceOptions,
@@ -484,7 +480,7 @@ class EPICSDevice(EngineDevice):
                          enable_fun=self._enable_fun,
                          channel_map=self._channel_map.copy())
 
-        #logger.debug(f'EPICS device created: {self._channel_map}')
+        # logger.debug(f'EPICS device created: {self._channel_map}')
 
     def is_connected(self):
         return self.acc.cm.is_connected(self.pv.name)
@@ -518,7 +514,7 @@ class EPICSDevice(EngineDevice):
             self.data[cn] = r
             self.response_data[cn] = response
             self.success = self.extract_status(response)
-            #logger.debug(f'EPICS read now: ({cn})=({response})')
+            # logger.debug(f'EPICS read now: ({cn})=({response})')
             return r
         except Exception as ex:
             logger.warning(f'EPICS read now ({cn})=({response}) failed, {ex}')
@@ -551,7 +547,8 @@ class EPICSDevice(EngineDevice):
         else:
             result = self.pv.write(value, wait=False)
         t2 = time.perf_counter()
-        logger.debug(f'PV ({self.pv.name})=({value}) write in ({t2-t1:.3f}) ({self.options.wait=})')
+        logger.debug(
+            f'PV ({self.pv.name})=({value}) write in ({t2 - t1:.3f}) ({self.options.wait=})')
         if self.options.wait:
             if not status(result):
                 raise Exception(f'PV write failed - {result=}')
@@ -578,18 +575,18 @@ class EPICSDevice(EngineDevice):
             return True
 
     def callback(self, sub, response):
-        #logger.debug(f'EPICS callback ({sub=}) ({response=})')
+        # logger.debug(f'EPICS callback ({sub=}) ({response=})')
         try:
             pv_name = self.extract_name(sub)
             assert pv_name == self.options.pv_name
             cn = self.options.pv_to_ch_map[pv_name]
             r = self.extract_data(response)
-            #logger.debug(f'EPICS callback ({cn})=({r})')
+            # logger.debug(f'EPICS callback ({cn})=({r})')
             self.data[cn] = r
             self.response_data[cn] = response
             self.success = self.extract_status(response)
             if self.ctx is not None:
-                #logger.debug(f'EPICS callback ({cn})=({r}) ISSUE')
+                # logger.debug(f'EPICS callback ({cn})=({r}) ISSUE')
                 self.ctx.issue_update(self, {cn: r})
             # logger.debug(f'EPICS callback ({cn})=({r}) END')
         except Exception as ex:
@@ -597,7 +594,7 @@ class EPICSDevice(EngineDevice):
             logger.error(f'{traceback.format_exc()}')
 
     def _enable_fun(self, ev):
-        #from ..controls.pv import EPICSPV, SimPV
+        # from ..controls.pv import EPICSPV, SimPV
         # if self.pv is None:
         #     if self.options.connection == 'epics':
         #         logger.debug(f'Creating EPICSPV with {self.options.pv_config}')
@@ -607,7 +604,7 @@ class EPICSDevice(EngineDevice):
         #         self.pv = SimPV(options=self.options.pv_config)
         self.acc.add_pv_object([self.pv])
         self.acc.cm.subscribe_custom(self.pv, self.callback)
-        #logger.debug(f'EPICS device ({self.pv.name}) enabled')
+        # logger.debug(f'EPICS device ({self.pv.name}) enabled')
 
 
 class RPNDeviceOptions(DeviceOptions):
@@ -616,7 +613,7 @@ class RPNDeviceOptions(DeviceOptions):
 
 
 class RPNEngineDevice(EngineDevice):
-    device_type = 'RPN'
+    device_type: str = 'RPN'
     options: RPNDeviceOptions
 
     def __init__(self, options: RPNDeviceOptions, ctx: Optional[SignalContext]):
@@ -667,11 +664,12 @@ class GenericDeviceOptions(DeviceOptions):
 
 
 class GenericDevice(EngineDevice):
-    device_type = 'generic'
+    device_type: str = 'generic'
     options: GenericDeviceOptions
 
     def __init__(self, options: GenericDeviceOptions,
-                 ctx: SignalContext = None):
+                 ctx: SignalContext = None
+                 ):
         self.ctx = ctx
         wf = self._write_fun if options.write_fun is not None else None
         sf = self._scan_fun if options.scan_fun is not None else None
@@ -700,7 +698,9 @@ class GenericDevice(EngineDevice):
     def _scan_fun(self, ev):
         return self.options.scan_fun(ev, self)
 
+
 class ModelDeviceOptions(DeviceOptions):
+    device_type: Literal['model_wrapper'] = 'model_wrapper'
     device: VirtualDevice
 
     class Config:
@@ -708,7 +708,7 @@ class ModelDeviceOptions(DeviceOptions):
 
 
 class ModelDevice(EngineDevice):
-    device_type = 'Model wrapper'
+    device_type: str = 'Model wrapper'
     options: ModelDeviceOptions
 
     def __init__(self,
@@ -741,6 +741,7 @@ class ModelDevice(EngineDevice):
 
 
 class ModelPairDeviceOptions(DeviceOptions):
+    device_type: Literal['model_pair_wrapper'] = 'model_pair_wrapper'
     device: TimeAwareModel
     variable_name: str
     readback_name: str
@@ -751,7 +752,7 @@ class ModelPairDeviceOptions(DeviceOptions):
 
 class ModelPairDevice(EngineDevice):
     """ Model a setpoint/readback pair of channels """
-    device_type = 'Model pair wrapper'
+    device_type: str = 'Model pair wrapper'
     options: ModelPairDeviceOptions
 
     def __init__(self,
@@ -764,6 +765,7 @@ class ModelPairDevice(EngineDevice):
                          ctx,
                          update_fun=self._update_fun,
                          read_fun=self._read_fun,
+                         read_now_fun=self._read_now_fun,
                          write_fun=self._write_fun,
                          scan_fun=self._scan_fun,
                          channel_map=channel_map)
@@ -778,6 +780,9 @@ class ModelPairDevice(EngineDevice):
         return self.data
 
     def _read_fun(self, ev, channel_name):
+        return self.data[channel_name]
+
+    def _read_now_fun(self, ev, channel_name):
         return self.data[channel_name]
 
     def _write_fun(self, ev, value_dict, aux_dict):

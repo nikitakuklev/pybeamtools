@@ -4,7 +4,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
     LONG_DESCRIPTION = fh.read()
 
 INSTALL_REQUIRES = [
-    #'numpy>=1.13.3',
+    'numpy>=1.13.3',
     #'pandas>=1.0'
 ]
 EXTRAS_REQUIRES = {

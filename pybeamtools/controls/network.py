@@ -11,6 +11,7 @@ from .pv import EPICSPV, PV, PVOptions, SimPV
 
 logger = logging.getLogger(__name__)
 
+
 class ConnectionOptions(BaseModel):
     network: Literal['epics', 'dummy'] = 'dummy'
     pvs: list[PVOptions] = []
@@ -168,11 +169,11 @@ class EPICSConnectionManager(ConnectionManager):
     def __state_callback(self, pv, state: str):
         self.logger.debug(f'Connection state of PV ({pv.name}) changed to ({state})')
         if state == 'connected':
-            #if pv.name not in self.initial_pv_data_map:
-                #start = pv.read(data_type='control')
-                #self.initial_pv_data_map[pv.name] = start
-                #self.pv_map[pv.name].lower_ctrl_limit = start.metadata.lower_ctrl_limit
-                #self.pv_map[pv.name].upper_ctrl_limit = start.metadata.upper_ctrl_limit
+            # if pv.name not in self.initial_pv_data_map:
+            # start = pv.read(data_type='control')
+            # self.initial_pv_data_map[pv.name] = start
+            # self.pv_map[pv.name].lower_ctrl_limit = start.metadata.lower_ctrl_limit
+            # self.pv_map[pv.name].upper_ctrl_limit = start.metadata.upper_ctrl_limit
             pass
         elif state == 'disconnected':
             pass
@@ -184,7 +185,7 @@ class EPICSConnectionManager(ConnectionManager):
         assert all(isinstance(pv, EPICSPV) for pv in pvs), f'Only EPICSPVs can be added'
         pv_names = [pv.name for pv in pvs]
         # No individual contexts
-        #self.ctxs.update({pv.name: Context() for pv in pvs})
+        # self.ctxs.update({pv.name: Context() for pv in pvs})
         self.ctxs.update({pv.name: self.ctx for pv in pvs})
 
         # pvs_caproto = self.ctx.get_pvs(*pv_names, priority=1)
@@ -251,7 +252,7 @@ class EPICSConnectionManager(ConnectionManager):
             self.logger.warning(f'PV {pv.name} already has subscriptions')
 
         def callback(sub, response):
-            #logger.warning(f'EPICS callback ({sub=} {response=})')
+            # logger.warning(f'EPICS callback ({sub=} {response=})')
             try:
                 name = sub.pv.name
                 self.circular_buffers_map[name].append(response)

@@ -15,7 +15,6 @@ from pybeamtools.sim.pddevices import DS, EPICSDevice, EPICSDeviceOptions, EchoD
     ProxyDeviceOptions, SignalContext, TRIG
 from pybeamtools.sim.templates import MockSetupPairDevice
 from pybeamtools.sim.errors import DeviceEventTimeout
-import pybeamtools.controls as pc
 
 logger = logging.getLogger(__name__)
 

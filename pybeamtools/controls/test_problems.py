@@ -28,4 +28,4 @@ class Quadratic(Problem):
     def evaluate(self, x) -> Tuple[Tuple, Tuple]:
         assert x.shape[-1] == self.n_var
         size = x.shape[-1]
-        return self._evaluate(x)
+        return self._evaluate(x), None

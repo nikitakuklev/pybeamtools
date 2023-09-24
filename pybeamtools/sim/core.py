@@ -500,46 +500,44 @@ class SimulationEngine:
             # self.logger.warning(f'Device ({dn}) non-functional state ({dev.state})')
             raise DeviceDisabledError(f'Device ({dn}) in non-functional state ({dev.state})')
 
-    def read_channel(self, cn: str, timeout=5.0) -> DataT:
+    def read_channel(self, cn: str, timeout: float = 5.0) -> DataT:
         """ Read from channel """
         with self.settings_lock:
             self.ensure_channel_exists(cn)
             dn = self.channel_to_device_name[cn]
-            # self.check_enabled_state(dn)
-            # self.check_deps_satisfied(cn)
             ev = Event(op=OP.READ, dn=dn, txid=self.next_txid(), t_event=self.time(),
                        data={cn: None})
             f = self.get_future_for_event(ev)
             if self.TRACE:
-                self.logger.debug(f'Read request event for C({cn}) added')
+                self.logger.debug(f'{ev.uuid} | Read request event for C({cn}) added')
         try:
             result = self.await_future(f, timeout=timeout)
         except DeviceEventTimeout as ex:
-            self.logger.debug(f'Read event ({ev.data=}) timeout')
+            self.logger.debug(f'{ev.uuid} | Read event ({ev.data=}) timeout')
             raise ex
-        self.logger.debug(f'Read event ({result=})')
+        self.logger.debug(f'{ev.uuid} | Read event ({result=})')
         if isinstance(result.data, Exception):
             raise result.data
         return result.data[cn]
 
-    def read_channel_now(self, cn: str, timeout=5.0) -> DataT:
+    def read_channel_now(self, channel_name: str, timeout: float = 5.0) -> DataT:
         """ Read from channel immediately """
         with self.settings_lock:
-            self.ensure_channel_exists(cn)
-            dn = self.channel_to_device_name[cn]
+            self.ensure_channel_exists(channel_name)
+            dn = self.channel_to_device_name[channel_name]
             ev = Event(op=OP.READ_NOW, dn=dn, txid=self.next_txid(), t_event=self.time(),
-                       data={cn: None})
+                       data={channel_name: None})
             f = self.get_future_for_event(ev)
-            self.logger.debug(f'Read now request event for C({cn}) added')
+            self.logger.debug(f'{ev.uuid} | Read now request event for C({channel_name}) added')
         try:
             result = self.await_future(f, timeout=timeout)
         except DeviceEventTimeout as ex:
-            self.logger.debug(f'Read now event ({ev.data=}) timeout')
+            self.logger.debug(f'{ev.uuid} | Read now event ({ev.data=}) timeout')
             raise ex
-        self.logger.debug(f'Read now event ({result=})')
+        self.logger.debug(f'{ev.uuid} | Read now event ({result=})')
         if isinstance(result.data, Exception):
             raise result.data
-        return result.data[cn]
+        return result.data[channel_name]
 
     def read(self, channels: list[str], include_timestamps=False):
         data = {}
@@ -629,12 +627,12 @@ class SimulationEngine:
             result = self.await_future(f, timeout=timeout)
             t3 = time.perf_counter()
         except DeviceEventTimeout as ex:
-            self.logger.debug(f'Write event ({ev.data=}) timeout')
+            self.logger.debug(f'{ev.uuid} | Write event ({ev.data=}) timeout')
             raise ex
-        # self.process_events()
         dt2 = t2 - t1
         dt3 = t3 - t2
-        self.logger.debug(f'Write event ({ev.data=}) -> ({result=}) in ({dt2:.3f})|({dt3:.3f})')
+        self.logger.debug(f'{ev.uuid} | Write event ({ev.data=}) -> ({result=}) in ({dt2:.3f})|'
+                          f'({dt3:.3f})')
         if isinstance(result.data, Exception):
             raise result.data
 
@@ -772,7 +770,7 @@ class SimulationEngine:
             deps_list.extend(self.get_deps_list(dep))
         return list(set(deps_list))
 
-    def next_txid(self, ev=None) -> int:
+    def next_txid(self, ev: Event = None) -> int:
         if ev is not None:
             txid = self.txid_map[ev.root]
             self.txid_map[ev.root] += 1
@@ -787,7 +785,7 @@ class SimulationEngine:
                     timeout: float = 0.0
                     ):
         """ Notify engine that a new value is available """
-        # self.logger.debug(f'Pushing dev ({dev.name}) update ({data})')
+        # Does not require a lock
         dn = dev.name
         assert isinstance(data, dict)
         txid = txid if txid is not None else self.next_txid()
@@ -797,25 +795,15 @@ class SimulationEngine:
         #     assert k in self.dev_channels_map[dn], \
         #         f'Channel ({k}) not registered to ({dev.name})'
         t_run = self.time()
-        ev = Event(op=OP.UPDATE_PUSH, dn=dn, txid=txid, t_event=t_run,
-                   data=data.copy())
+        ev = Event(op=OP.UPDATE_PUSH, dn=dn, txid=txid, t_event=t_run, data=data.copy())
+        if self.TRACE:
+            self.logger.debug(f'{ev.uuid} | Pushing D({dev.name}) update ({data})')
         f = self.get_future_for_event(ev)
         if timeout > 0.0:
             result = self.await_future(f, timeout=timeout)
             if isinstance(result.data, Exception):
                 raise result.data
-        # self._propagate_update_event(t_run, dn, ev)
         # with self.settings_lock:
-        #     self.logger.debug(f'Pushing dev ({dev.name}) update ({data})')
-        #     dn = dev.name
-        #     assert isinstance(data, dict)
-        #     txid = txid if txid is not None else self.next_txid()
-        #     assert dev.name in self.devices_name_list
-        #     for k, v in data.items():
-        #         assert k in self.channels, f'Channel ({k}) missing?'
-        #         assert k in self.dev_channels_map[dn], \
-        #             f'Channel ({k}) not registered to ({dev.name})'
-        #     t_run = self.time()
         #     ev = Event(op=OP.UPDATE_PROP, dn=dn, txid=txid, t_event=t_run,
         #                data=data.copy())
         #     self._propagate_update_event(t_run, dn, ev)
@@ -840,15 +828,16 @@ class SimulationEngine:
         self.logger.debug(f'{ev.uuid} | {result=}')
         return result
 
-    def get_future_for_event(self, ev: Event) -> Future:
+    def get_future_for_event(self, ev: Event, skip_cb: bool = False) -> Future:
         f = Future()
 
-        def cb(r):
-            if self.TRACE:
-                self.logger.debug(f'{ev.uuid} | Future callback with ({r=})')
-            f.set_result(r)
+        if not skip_cb:
+            def cb(r):
+                if self.TRACE:
+                    self.logger.debug(f'{ev.uuid} | Future callback with ({r=})')
+                f.set_result(r)
 
-        ev.set_cb(cb)
+            ev.set_cb(cb)
         self.event_q.put(ev)
         if self.TRACE:
             self.logger.debug(f'{ev.uuid} | Event ({ev.op=}) for ({ev.dn=}) submitted')
@@ -1054,13 +1043,8 @@ class SimulationEngine:
         self.logger.debug(f'Update thread (id {threading.get_ident()}) on')
         while True:
             try:
-                # try:
-                #     ev = self.event_q_prio.get_nowait()
-                # except queue.Empty:
-                #     ev = update_q.get(block=True, timeout=0.5)
-                ev = update_q.get(block=True, timeout=0.5)
+                ev = update_q.get(timeout=0.5)
                 dn = ev.dn
-                # uuid = f'E{ev.txid}:{ev.source}:{ev.root}'
                 with self.settings_lock:
                     t_process = self.time()
                     t1 = time.perf_counter()
@@ -1229,7 +1213,7 @@ class SimulationEngine:
             except queue.Empty:
                 # Check shutdown
                 try:
-                    cmd = command_q.get(timeout=0.01)
+                    cmd = command_q.get(block=False)
                     if cmd is None:
                         self.logger.debug(f'Goodbye from update thread')
                         break

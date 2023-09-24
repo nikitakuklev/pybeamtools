@@ -5,7 +5,7 @@ import uuid
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
-from pydantic import BaseModel, NonNegativeFloat, NonNegativeInt, root_validator, validator
+from pydantic import BaseModel, NonNegativeFloat, NonNegativeInt, field_validator, model_validator
 
 from .errors import ControlLibException
 
@@ -22,12 +22,12 @@ class InterlockOptions(BaseModel):
     priority: NonNegativeInt = 0
     ilock_type: str = ''
 
-    @root_validator
-    def check(cls, values):
-        reads = values.get('read_events', [])
-        writes = values.get('write_events', [])
+    @model_validator(mode='after')
+    def check(self):
+        reads = self.read_events
+        writes = self.write_events
         reads_set = set(reads)
-        pv_set = set(values.get('pv_list'))
+        pv_set = set(self.pv_list)
         assert reads_set.issubset(pv_set)
         assert set(writes).issubset(pv_set)
         return values
@@ -91,7 +91,7 @@ class LimitInterlockOptions(InterlockOptions):
     limits: dict[str, tuple[Optional[float], Optional[float]]]
     block_all_writes: bool = False
 
-    @validator('limits')
+    @field_validator('limits')
     def check_limits(cls, v):
         if v is not None:
             assert len(v) > 0
