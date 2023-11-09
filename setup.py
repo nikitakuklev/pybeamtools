@@ -15,7 +15,7 @@ EXTRAS_REQUIRES = {
 LICENSE = 'MIT'
 DESCRIPTION = 'Various tools for accelerator physics'
 CLASSIFIERS = [
-    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Topic :: Scientific/Engineering",
@@ -34,6 +34,6 @@ setuptools.setup(
     classifiers=CLASSIFIERS,
     platforms="any",
     install_requires=INSTALL_REQUIRES,
-    python_requires=">=3.8",
+    python_requires=">=3.9",
     extras_require=EXTRAS_REQUIRES
 )
