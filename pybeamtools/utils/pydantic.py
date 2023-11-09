@@ -7,7 +7,7 @@ from typing import Callable, TypeVar, Any, List
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, Extra, root_validator, create_model, Field
+from pydantic import BaseModel, Extra, model_validator, root_validator, create_model, Field
 
 # ObjType = TypeVar("ObjType")
 logger = logging.getLogger(__name__)
@@ -258,7 +258,7 @@ class CallableModel(BaseModel):
         json_encoders = JSON_ENCODERS
         extra = Extra.forbid
 
-    @root_validator(pre=True)
+    @model_validator(mode='before')
     def validate_all(cls, values):
         callable = values.pop("callable")
 

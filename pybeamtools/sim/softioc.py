@@ -158,7 +158,7 @@ class SimpleIOC:
         self.input_names = []
         for i, el in enumerate(self.variables):
             mag = RealisticMagnet(name=el, value=0.0, low=-5.0, high=5.0, noise=self.noise,
-                                  resolution=None, model='exponential', model_kwargs={
+                                  resolution=None, model='exponential', pmodel_kwargs={
                     'decay_constant': 0.03
                 })
             pv_ai = pvproperty(name=el, value=mag.setpoint,

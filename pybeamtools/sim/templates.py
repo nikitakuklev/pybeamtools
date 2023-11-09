@@ -24,7 +24,7 @@ class MockSetupPairDevice:
                  evaluation_functions: dict[str, Callable] = None,
                  evaluation_variables: dict[str, list[str]] = None,
                  noise: float = None,
-                 variable_model_kwargs=None,
+                 variable_pmodel_kwargs=None,
                  scan_period_rb: float = 0.0,
                  scan_period_obj: float = 0.0,
                  scan_period_extra: float = 0.0,
@@ -71,7 +71,7 @@ class MockSetupPairDevice:
         self.constraints_devices: list[EngineDevice] = []
         self.base_names = {}
 
-        self.variable_model_kwargs = variable_model_kwargs or {}
+        self.variable_pmodel_kwargs = variable_pmodel_kwargs or {}
         self.realtime = realtime
         self.scan_period_rb = scan_period_rb
         self.scan_period_obj = scan_period_obj
@@ -108,14 +108,14 @@ class MockSetupPairDevice:
         self.ctx = ctx = SignalContext(se=sim)
         self.sim = sim
 
-        model_kwargs = dict(readback_update_rate=0.0)
-        model_kwargs.update(self.variable_model_kwargs)
+        pmodel_kwargs = dict(readback_update_rate=0.0)
+        pmodel_kwargs.update(self.variable_pmodel_kwargs)
         for i, el in enumerate(self.variables):
             ival = self.variables_initial_values.get(el, 0.0)
             magmodel = RealisticModel(RealisticModelOptions(name='magmodel',
                                                             value=ival,
                                                             noise=self.noise,
-                                                            **model_kwargs), sim.time())
+                                                            **pmodel_kwargs), sim.time())
             mag = ModelPairDevice(ModelPairDeviceOptions(name=f'DEV:{el}',
                                                          variable_name=self.variables[i],
                                                          readback_name=self.readbacks[i],

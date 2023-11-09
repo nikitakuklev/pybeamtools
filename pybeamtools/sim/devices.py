@@ -62,7 +62,7 @@ class TRIGSPEC(Enum):
 #                  low=None, high=None,
 #                  noise=None, resolution=None,
 #                  measurement_period=None,
-#                  model='instant', model_kwargs=None
+#                  model='instant', pmodel_kwargs=None
 #                  ) -> None:
 #         if high is not None and low is not None:
 #             assert high > low
@@ -81,7 +81,7 @@ class TRIGSPEC(Enum):
 #         self.high = high
 #         self.model = model
 #         self.measurement_period = measurement_period
-#         self.model_kwargs = model_kwargs or {'decay_constant': 2}
+#         self.pmodel_kwargs = pmodel_kwargs or {'decay_constant': 2}
 #         self._update_value(now)
 #
 #         channel_map = {read_channel: {}, exact_read_channel: {}}
@@ -138,7 +138,7 @@ class TRIGSPEC(Enum):
 #     def _update_value(self, t: float):
 #         if self.model == 'exponential':
 #             # For exp, N(t) = N0 exp(-lambda*T)
-#             decay_constant = self.model_kwargs['decay_constant']
+#             decay_constant = self.pmodel_kwargs['decay_constant']
 #             delta = t - self.time_last_update
 #             output_delta = self.value - self.setpoint
 #             new_value = self.setpoint - output_delta * np.exp(-decay_constant * delta)
@@ -389,7 +389,7 @@ class RealisticModelOptions(ModelOptions):
     noise: NonNegativeFloat = None
     resolution: NonNegativeFloat = None
     model: Literal['instant', 'exponential', 'underdamped'] = 'instant'
-    model_kwargs: dict = {}
+    pmodel_kwargs: dict = {}
     # setpoint params
     setpoint_update_rate: float = None
 
@@ -403,7 +403,7 @@ class RealisticModelOptions(ModelOptions):
         if high is not None and low is not None:
             assert high > low
 
-    @validator('model_kwargs', always=True)
+    @validator('pmodel_kwargs', always=True)
     def check_model_opts(cls, kw, values):
         if values['model'] == 'exponential':
             kw.update({'decay_constant': 2})
@@ -489,7 +489,7 @@ class RealisticModel(TimeAwareModel):
     def _update_raw_value(self, t: float):
         if self.o.model == 'exponential':
             # For exp, N(t) = N0 exp(-lambda*T)
-            decay_constant = self.o.model_kwargs['decay_constant']
+            decay_constant = self.o.pmodel_kwargs['decay_constant']
             delta_t = t - self.time_last_update
             delta_v = self.raw_value - self.setpoint
             new_value = self.setpoint + delta_v * np.exp(-decay_constant * delta_t)
@@ -498,8 +498,8 @@ class RealisticModel(TimeAwareModel):
         elif self.o.model == 'underdamped':
             # N(t) = N0 exp(-w*c*T) exp(+- i*w*sqrt(1-c**2)*T)
             # = N0 exp(-w*c*T) cos(w*sqrt(1-c**2)*T)
-            dc = self.o.model_kwargs['decay_constant']
-            c = self.o.model_kwargs['c']
+            dc = self.o.pmodel_kwargs['decay_constant']
+            c = self.o.pmodel_kwargs['c']
 
             delta_t = t - self.time_last_update
             delta_t_abs = t - self.time_last_write
@@ -577,7 +577,7 @@ class RealisticMagnet(VirtualDevice):
                  low=None, high=None,
                  noise=None, resolution=None,
                  measurement_period=None,
-                 model='instant', model_kwargs=None
+                 model='instant', pmodel_kwargs=None
                  ) -> None:
         if high is not None and low is not None:
             assert high > low
@@ -596,7 +596,7 @@ class RealisticMagnet(VirtualDevice):
         self.high = high
         self.model = model
         self.measurement_period = measurement_period
-        self.model_kwargs = model_kwargs or {'decay_constant': 2}
+        self.pmodel_kwargs = pmodel_kwargs or {'decay_constant': 2}
 
     def read(self, t: float = None) -> float:
         self.time_last_read = t or time.time()
@@ -645,13 +645,13 @@ class RealisticMagnet(VirtualDevice):
     def _update_value(self, t: float):
         if self.model == 'exponential':
             # For exp, N(t) = N0 exp(-lambda*T)
-            # decay_constant = self.model_kwargs['decay_constant']
+            # decay_constant = self.pmodel_kwargs['decay_constant']
             # delta = t - self.time_last_update
             # output_delta = self.value - self.setpoint
             # new_value = self.setpoint - output_delta * np.exp(-decay_constant * delta)
             # self.raw_value = new_value
 
-            decay_constant = self.model_kwargs['decay_constant']
+            decay_constant = self.pmodel_kwargs['decay_constant']
             delta_t = t - self.time_last_update
             delta_v = self.value - self.setpoint
             new_value = self.setpoint + delta_v * np.exp(-decay_constant * delta_t)
