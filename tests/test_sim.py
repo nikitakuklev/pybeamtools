@@ -447,7 +447,7 @@ def test_adv_write_rt(sim_engine_realtime: SimulationEngine):
 
     mag2model = RealisticModel(RealisticModelOptions(name='mag2model', value=5.5,
                                                      model='exponential',
-                                                     model_kwargs={'decay_constant': 0.5},
+                                                     pmodel_kwargs={'decay_constant': 0.5},
                                                      readback_update_rate=0.0), local_time())
     mag2 = ModelPairDevice(ModelPairDeviceOptions(name='MAG2',
                                                   variable_name='MAG2',

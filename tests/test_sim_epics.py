@@ -65,9 +65,9 @@ def sim_engine_realtime() -> SimulationEngine:
 #                              extra_vars=[],
 #                              evaluation_functions=None,
 #                              evaluation_variables=None, noise=0.01,
-#                              variable_model_kwargs=dict(readback_update_rate=1.0,
+#                              variable_pmodel_kwargs=dict(readback_update_rate=1.0,
 #                                                         model='exponential',
-#                                                         model_kwargs={'decay_constant': 0.5},
+#                                                         pmodel_kwargs={'decay_constant': 0.5},
 #                                                         ),
 #                              realtime=True)
 #
@@ -120,15 +120,15 @@ def test_mock_startup(accelerator, sim_engine_realtime):
     readbacks = ['X0_RB', 'X1_RB', 'X2_RB']
     objectives = ['OBJ0']
 
-    model_kwargs = dict(readback_update_rate=1.0,
+    pmodel_kwargs = dict(readback_update_rate=1.0,
                         model='exponential',
-                        model_kwargs={'decay_constant': 0.5},
+                        pmodel_kwargs={'decay_constant': 0.5},
                         )
     mg = MockSetupPairDevice(variables=variables,
                              objectives=objectives,
                              readbacks=readbacks,
                              noise=0.01,
-                             variable_model_kwargs=model_kwargs,
+                             variable_pmodel_kwargs=pmodel_kwargs,
                              realtime=True)
     mg.create(sim)
 

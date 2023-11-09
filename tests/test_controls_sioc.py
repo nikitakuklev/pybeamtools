@@ -189,15 +189,15 @@ class TestEPICSPV:
         sim.TRACE = True
         sim.TIME_TRACE = True
         sim.txid = 50000
-        model_kwargs = dict(readback_update_rate=1.0,
+        pmodel_kwargs = dict(readback_update_rate=1.0,
                             model='exponential',
-                            model_kwargs={'decay_constant': 0.5},
+                            pmodel_kwargs={'decay_constant': 0.5},
                             )
         mg = MockSetupPairDevice(variables=variables_pv,
                                  objectives=objectives_pv,
                                  readbacks=readbacks_pv,
                                  noise=0.01,
-                                 variable_model_kwargs=model_kwargs,
+                                 variable_pmodel_kwargs=pmodel_kwargs,
                                  scan_period_rb=0.0,
                                  realtime=True)
         mg.create(sim)
@@ -288,15 +288,15 @@ class TestEPICSPV:
         sim.TRACE = True
         sim.TIME_TRACE = True
         sim.txid = 50000
-        model_kwargs = dict(readback_update_rate=1.0,
+        pmodel_kwargs = dict(readback_update_rate=1.0,
                             model='exponential',
-                            model_kwargs={'decay_constant': 0.5},
+                            pmodel_kwargs={'decay_constant': 0.5},
                             )
         mg = MockSetupPairDevice(variables=variables_pv,
                                  objectives=objectives_pv,
                                  readbacks=readbacks_pv,
                                  noise=0.01,
-                                 variable_model_kwargs=model_kwargs,
+                                 variable_pmodel_kwargs=pmodel_kwargs,
                                  scan_period_rb=0.0,
                                  realtime=True)
         mg.create(sim)

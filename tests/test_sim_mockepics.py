@@ -70,9 +70,9 @@ def acc_and_sim_rt_noscan():
                              evaluation_functions=None,
                              evaluation_variables=None,
                              noise=0.01,
-                             variable_model_kwargs=dict(readback_update_rate=1.0,
+                             variable_pmodel_kwargs=dict(readback_update_rate=1.0,
                                                         model='exponential',
-                                                        model_kwargs={'decay_constant': 0.5},
+                                                        pmodel_kwargs={'decay_constant': 0.5},
                                                         ),
                              scan_period_rb=0.0,
                              realtime=True)
@@ -106,9 +106,9 @@ def acc_and_sim_rt_scan():
                              evaluation_functions=None,
                              evaluation_variables=None,
                              noise=0.01,
-                             variable_model_kwargs=dict(readback_update_rate=1.0,
+                             variable_pmodel_kwargs=dict(readback_update_rate=1.0,
                                                         model='exponential',
-                                                        model_kwargs={'decay_constant': 0.5},
+                                                        pmodel_kwargs={'decay_constant': 0.5},
                                                         ),
                              scan_period_rb=2.0,
                              realtime=True)
