@@ -1,7 +1,9 @@
 import collections
 import logging
+import time
 import traceback
 from abc import abstractmethod
+from functools import partial
 from typing import Any, Callable, Literal
 
 import numpy as np
@@ -103,6 +105,12 @@ class SimConnectionManager(ConnectionManager):
                 self.subscribe_monitor(pv)
             self.options.pvs.append(pv.options)
 
+    def read_pvs(self, pvs: list[SimPV], timeout: float = 5.0):
+        results = {}
+        for pv in pvs:
+            results[pv.name] = pv.read()
+        return results
+
     def get_pvs(self, pv_names: list[str]) -> list[PV]:
         for pv_name in pv_names:
             assert isinstance(pv_name, str), f'Expect string PV names, not {repr(pv_name)}'
@@ -188,7 +196,6 @@ class EPICSConnectionManager(ConnectionManager):
         # self.ctxs.update({pv.name: Context() for pv in pvs})
         self.ctxs.update({pv.name: self.ctx for pv in pvs})
 
-        # pvs_caproto = self.ctx.get_pvs(*pv_names, priority=1)
         pvs_caproto = []
         for pv in pvs:
             pvca = self.ctxs[pv.name].get_pvs(pv.name,
@@ -237,6 +244,28 @@ class EPICSConnectionManager(ConnectionManager):
     #         self.pv_map[pv_name] = pv
     #         if pv.options.monitor:
     #             self.subscribe_monitor(pv)
+
+    def read_pvs(self, pvs: list[EPICSPV], timeout: float = 5.0):
+        from caproto.threading.client import Batch
+
+        results = {}
+
+        def stash_result(name, response):
+            results[name] = response
+
+        with Batch(timeout=timeout) as b:
+            for epv in pvs:
+                pv = epv.caproto
+                b.read(pv, partial(stash_result, pv.name))
+
+        t1 = time.time()
+        while len(results) != len(pvs):
+            if time.time() - t1 < timeout:
+                time.sleep(0.01)
+
+        if len(results) != len(pvs):
+            raise TimeoutError(f'Failed to read all PVs ({len(results)}/{len(pvs)})')
+        return results
 
     def get_pvs(self, pv_names: list[str]) -> list[PV]:
         for pv_name in pv_names:

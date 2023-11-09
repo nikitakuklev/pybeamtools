@@ -4,13 +4,15 @@ import time
 
 from pydantic import BaseModel, Field, validator
 
-from .distributed import ProcessManager
-from .errors import ControlLibException, InterlockTimeoutError, InterlockWriteError, \
+from pybeamtools.controls.distributed import ProcessManager
+from pybeamtools.controls.errors import ControlLibException, InterlockTimeoutError, InterlockWriteError, \
     WrappedException
-from .interlocks import Interlock, InterlockOptions, LimitInterlock, LimitInterlockOptions, \
+from pybeamtools.controls.interlocks import Interlock, InterlockOptions, LimitInterlock, LimitInterlockOptions, \
     RatelimitInterlock, RatelimitInterlockOptions
-from .network import ConnectionOptions, EPICSConnectionManager, SimConnectionManager
-from ..utils.logging import config_root_logging
+from pybeamtools.controls.network import ConnectionManager, ConnectionOptions, EPICSConnectionManager, \
+    SimConnectionManager
+from pybeamtools.controls.pv import PV
+from pybeamtools.utils.logging import config_root_logging
 
 __all__ = ['AcceleratorOptions', 'Accelerator']
 
@@ -62,6 +64,7 @@ class Accelerator:
         self.TRACE = False
 
         self.pm = ProcessManager()
+        self.cm: ConnectionManager = None
         if options.connection_settings.network == 'epics':
             self.cm = EPICSConnectionManager(acc=self,
                                              options=options.connection_settings, ctx=ctx)
@@ -114,49 +117,6 @@ class Accelerator:
         """ Get PV objects from EPICS channel names"""
         return self.cm.get_pvs(pvs_names)
 
-    # def add_knob(self,
-    #              write_pv_name: str,
-    #              readback_pv_name: str = None,
-    #              store_current_values: bool = False
-    #              ):
-    #     assert write_pv_name in self.cm, f'Write PV {write_pv_name} has not been added'
-    #     assert readback_pv_name in self.cm, f'Readback PV {readback_pv_name} has not been added'
-    #     data = {}
-    #     knob = self.get_pv(write_pv_name)
-    #
-    #     data['ca_low'] = knob.lower_ctrl_limit
-    #     data['ca_high'] = knob.upper_ctrl_limit
-    #     data['write_start'] = np.nan
-    #     if store_current_values:
-    #         data['write_start'] = knob.read().data[0]
-    #     data['input'] = write_pv_name
-    #     data['pv_input'] = knob
-    #
-    #     if readback_pv_name is not None:
-    #         # data['readback_start'] = np.nan
-    #         # if store_current_values:
-    #         #     data['readback_start'] = knob.read().data[0]
-    #         readback = self.get_pv(readback_pv_name)
-    #         self.km.io_map[write_pv_name] = readback_pv_name
-    #         self.km.oi_map[readback_pv_name] = write_pv_name
-    #         # data['readback_start'] = readback.read().data[0]
-    #         data['pv_readback'] = readback
-    #         data['readback'] = readback_pv_name
-    #     else:
-    #         # data['readback_start'] = np.nan
-    #         data['pv_readback'] = None
-    #         data['readback'] = None
-    #
-    #     knob = Knob(write_pv_name=write_pv_name,
-    #                 readback_pv_name=readback_pv_name)
-    #     self.km.knobs_map_write[write_pv_name] = knob
-    #     self.km.knobs_map_readback[readback_pv_name] = knob
-    #     self.km.knobs.append(knob)
-    #
-    # @property
-    # def knob_df(self):
-    #     return self.km.get_df()
-
     def ensure_connection(self, pvs, timeout=2):
         if not isinstance(pvs, list):
             pvs = [pvs]
@@ -177,15 +137,15 @@ class Accelerator:
             assert pv_name in self.cm.pv_map
             pv = self.cm.pv_map[pv_name]
             pv._check_proposed_write(data)
-        #self.logger.debug(f'Individual PV validation passed')
+        # self.logger.debug(f'Individual PV validation passed')
         trig_ilocks = [i for i in self.interlocks if
-                                i.check_match_write(pvs_name, pvs_data)]
+                       i.check_match_write(pvs_name, pvs_data)]
         # triggered_uuids = [i.uuid for i in triggered_interlocks]
-        if len(trig_ilocks)>0:
+        if len(trig_ilocks) > 0:
             self.logger.info(
                     f'Write on ({pvs_name}) triggered ({len(trig_ilocks)}) of ({len(self.interlocks)}) interlocks')
         if len(trig_ilocks) == 0:
-            #self.logger.debug('No interlocks triggered, skip polling stage')
+            # self.logger.debug('No interlocks triggered, skip polling stage')
             return
         data_packages = []
         all_known_pvs = list(self.cm.pv_map.keys())
@@ -327,13 +287,45 @@ class Accelerator:
     #             values[i] = value
     #     return values
 
-    def read(self, pvs_read: list[str], timeout=1.0, include_timestamps=False, force=True):
+    def get_pv_objects(self, pvs_names: list[str]) -> list[PV]:
+        new_pvs = []
+        from pybeamtools.controls import EPICSPV, PVOptions
+        for p in pvs_names:
+            if p not in self.cm.pv_map:
+                pv = EPICSPV(PVOptions(name=p))
+                new_pvs.append(pv)
+        self.cm.add_pvs_objects(new_pvs)
+        return self.cm.get_pvs(pvs_names)
+
+    def read(self, pvs_read: list[str], timeout=1.0, include_timestamps=False):
         """ Read PVs immediately """
-        # if not isinstance(pvs_read, list):
-        #     pvs_read = [pvs_read]
-        values = [None] * len(pvs_read)
-        for i, pv in enumerate(pvs_read):
-            r = pv.read(data_type='time', timeout=timeout)
+        pvs = self.get_pv_objects(pvs_read)
+        values = {k: None for k in pvs_read}
+        data = self.cm.read_pvs(pvs, timeout=timeout)
+        for k, v in data.items():
+            if include_timestamps:
+                values[k] = (v.metadata.timestamp, v.data)
+            else:
+                values[k] = v.data
+
+        # for i, pv in enumerate(pvs):
+        #     r = pv.read(data_type='time', timeout=timeout)
+        #     assert r.status.success == 1
+        #     value = r.data
+        #     timestamp = r.metadata.timestamp
+        #     if include_timestamps:
+        #         values[i] = (timestamp, value)
+        #     else:
+        #         values[i] = value
+        return values
+
+    def write(self, data: dict[str, float], timeout=1.0, include_timestamps=False):
+        """ Read PVs immediately """
+        pvs_names = list(data.keys())
+        pvs = self.get_pv_objects(pvs_names)
+        values = {k: None for k in data}
+        for i, pv in enumerate(pvs):
+            r = pv.write(timeout=timeout, data=data[pv.name])
             assert r.status.success == 1
             value = r.data
             timestamp = r.metadata.timestamp
@@ -342,6 +334,20 @@ class Accelerator:
             else:
                 values[i] = value
         return values
+
+    # def write_and_verify(self,
+    #                      data_dict: dict[str, DataT],
+    #                      readback_map: dict[str, str] = None,
+    #                      timeout: float = 1.0,
+    #                      readback_kwargs: dict = None,
+    #                      atol_map: dict[str, float] = None,
+    #                      rtol_map: dict[str, float] = None,
+    #                      delay_after_write: float = None,
+    #                      readback_timeout: float = None,
+    #                      delay_after_readback: float = None,
+    #                      total_cycle_min_time: float = 0.0,
+    #                      try_read_now_after: float = 2.0,
+    #                      ):
 
     # def set_and_verify_multiple(self, pvdict, timeout=1.0, readback_kwargs=None,
     #                             readback_delay_min=None,
@@ -419,3 +425,46 @@ class Accelerator:
     # def set_and_verify(self, pv_write, value, timeout=1.0):
     #     """ Set PV and verify readback is within tolerance """
     #     self.set_and_verify_multiple(dict(pv_write=value))
+
+# def add_knob(self,
+#              write_pv_name: str,
+#              readback_pv_name: str = None,
+#              store_current_values: bool = False
+#              ):
+#     assert write_pv_name in self.cm, f'Write PV {write_pv_name} has not been added'
+#     assert readback_pv_name in self.cm, f'Readback PV {readback_pv_name} has not been added'
+#     data = {}
+#     knob = self.get_pv(write_pv_name)
+#
+#     data['ca_low'] = knob.lower_ctrl_limit
+#     data['ca_high'] = knob.upper_ctrl_limit
+#     data['write_start'] = np.nan
+#     if store_current_values:
+#         data['write_start'] = knob.read().data[0]
+#     data['input'] = write_pv_name
+#     data['pv_input'] = knob
+#
+#     if readback_pv_name is not None:
+#         # data['readback_start'] = np.nan
+#         # if store_current_values:
+#         #     data['readback_start'] = knob.read().data[0]
+#         readback = self.get_pv(readback_pv_name)
+#         self.km.io_map[write_pv_name] = readback_pv_name
+#         self.km.oi_map[readback_pv_name] = write_pv_name
+#         # data['readback_start'] = readback.read().data[0]
+#         data['pv_readback'] = readback
+#         data['readback'] = readback_pv_name
+#     else:
+#         # data['readback_start'] = np.nan
+#         data['pv_readback'] = None
+#         data['readback'] = None
+#
+#     knob = Knob(write_pv_name=write_pv_name,
+#                 readback_pv_name=readback_pv_name)
+#     self.km.knobs_map_write[write_pv_name] = knob
+#     self.km.knobs_map_readback[readback_pv_name] = knob
+#     self.km.knobs.append(knob)
+#
+# @property
+# def knob_df(self):
+#     return self.km.get_df()
