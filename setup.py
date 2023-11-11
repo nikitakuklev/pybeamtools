@@ -26,7 +26,12 @@ setuptools.setup(
     name="pybeamtools",
     author="Nikita Kuklev",
     version="0.1",
-    packages=["pybeamtools"],
+    packages=setuptools.find_packages(where='.', include=['pybeamtools*']),
+    include_package_data=True,
+    package_data={
+        "pybeamtools": ["*.sdds", "*.txt", "*.json", "*.ui", "*.yaml", "*.yml", "*.workspace",
+                  "*.py"],
+    },
     description=DESCRIPTION,
     license=LICENSE,
     long_description=LONG_DESCRIPTION,
