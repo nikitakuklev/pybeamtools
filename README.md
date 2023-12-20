@@ -1,3 +1,11 @@
-pybeamtools is a collection of various utilities in a modular shape
+<br/>
+<div align="center">
+  <h3 align="center">pybeamtools</h3>
+  <p align="center">
+    Collection of I/O and data manipulation utilities for use at APS and beyond
+  </p>
+</div>
 
-should work as is by checking out into your project directory
+## About
+_pybeamtools_ is a pure-Python library containing various shared code used for data collection,
+ integration testing, and various other purposes. It is best learned by inspecting the code directly.
