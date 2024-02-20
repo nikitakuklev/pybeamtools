@@ -14,7 +14,7 @@ def read_fresh(self, pvs_read, timeout=1.0, now=None, min_readings=1, max_readin
     values = [None] * len(pvs_read)
     for i, pv in enumerate(pvs_read):
         if use_buffer:
-            responses = self._get_recent_buffer_data(pv.name, start=now)
+            responses = self.get_buffer_data(pv.name, start=now)
         else:
             responses = []
         if max_readings is not None and len(responses) > max_readings:
@@ -67,8 +67,8 @@ def set_and_verify_multiple(self, pvdict, timeout=1.0, readback_kwargs=None,
     from caproto.threading.client import Batch
     kv = self.kv
     df = self.df
-    readback_delay_min = readback_delay_min or self.READBACK_DELAY_MIN
-    readback_delay_max = readback_delay_max or self.READBACK_DELAY_MAX
+    readback_delay_min = readback_delay_min or self.DELAY_AFTER_WRITE
+    readback_delay_max = readback_delay_max or self.READBACK_OK_TIMEOUT
     assert self.df is not None
     readback_kwargs = readback_kwargs or dict(min_readings=1)
     assert all(k in df.index for k in pvdict.keys())
@@ -128,7 +128,7 @@ def set_and_verify_multiple(self, pvdict, timeout=1.0, readback_kwargs=None,
 
     t_spent = time.perf_counter() - t_start
     if self.READBACK_TOTAL_SET_TIME_MIN is not None:
-        t_sleep = max(self.READBACK_DELAY_POST_MIN, self.READBACK_TOTAL_SET_TIME_MIN - t_spent)
+        t_sleep = max(self.DELAY_AFTER_RB, self.READBACK_TOTAL_SET_TIME_MIN - t_spent)
         time.sleep(t_sleep)
     return values
 
