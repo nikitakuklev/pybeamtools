@@ -53,11 +53,11 @@ class ConnectionManager:
 
 class SimConnectionManager(ConnectionManager):
     def __init__(self, acc, options, ctx) -> None:
-        from ..sim.core import SimulationEngine
+        from ..sim.core import SignalEngine
         super().__init__(acc, options)
         self.logger.info('Creating dummy connection manager')
         # assert ctx.is_running
-        self.sim: SimulationEngine = ctx
+        self.sim: SignalEngine = ctx
 
         if len(options.pvs) > 0:
             names = [x.name for x in self.options.pvs]

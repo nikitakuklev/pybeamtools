@@ -98,7 +98,7 @@ class MockSetupPairDevice:
         logger.info(f"Constants: {self.constants}")
         logger.info(f"EVars: {self.evaluation_variables}")
 
-        from pybeamtools.sim.core import SimulationEngine, SignalEngineOptions
+        from pybeamtools.sim.core import SignalEngine, SignalEngineOptions
         from pybeamtools.sim.pddevices import (
             EchoDevice,
             EchoDeviceOptions,
@@ -117,7 +117,7 @@ class MockSetupPairDevice:
                 def fixed_time():
                     return t
 
-            sim = SimulationEngine(SignalEngineOptions(time_function=fixed_time))
+            sim = SignalEngine(SignalEngineOptions(time_function=fixed_time))
             sim.TRACE = True
         else:
             pass
@@ -367,10 +367,10 @@ class MockGeneratorEvents:
         def fixed_time():
             return t
 
-        from pybeamtools.sim.core import SimulationEngine, SignalEngineOptions
+        from pybeamtools.sim.core import SignalEngine, SignalEngineOptions
 
         if sim is None:
-            sim = SimulationEngine(SignalEngineOptions(time_function=fixed_time))
+            sim = SignalEngine(SignalEngineOptions(time_function=fixed_time))
             sim.TRACE = True
         from pybeamtools.sim.pddevices import EchoDevice, EchoDeviceOptions
 

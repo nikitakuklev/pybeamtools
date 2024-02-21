@@ -11,17 +11,14 @@ import nest_asyncio
 import numpy as np
 from caproto import SkipWrite
 from caproto.asyncio.server import run
-from caproto.server import PVGroup, SubGroup, pvproperty, PvpropertyDouble, PVSpec
+from caproto.server import SubGroup, pvproperty, PvpropertyDouble, PVSpec
 from caproto.server.typing import AsyncLibraryLayer, T_contra
 
-from .core import SimulationEngine
+from pybeamtools.sim.core import SignalEngine
 from .models import RealisticMagnet, StaticInputDevice
 from ..controls.test_problems import Quadratic
 from ..controls.virtual_tools import (
-    EPICSVirtualInput,
     AdaptivePVGroup,
-    EPICSVirtualIOC,
-    EPICSEchoGroup,
     EchoFactory,
 )
 
@@ -44,7 +41,7 @@ class SoftIOC:
         self.pvdb = None
 
     def ping(self):
-        logger.info(f"Pong")
+        logger.info("Pong")
         return "pong"
 
     def run(self):
@@ -220,7 +217,7 @@ class SimpleIOC:
         }
         self.pvdb = pvdb
 
-        logger.info(f"Soft IOC config:")
+        logger.info("Soft IOC config:")
         logger.info(f"Vars: {self.variables}")
         logger.info(f"Objectives: {self.objectives}")
         logger.info(f"Test vars: {self.test_variables}")
@@ -422,7 +419,7 @@ class TestIOC:
         }
         self.pvdb = pvdb
 
-        logger.info(f"Soft IOC config:")
+        logger.info("Soft IOC config:")
         logger.info(f"Vars: {self.variables}")
         logger.info(f"Objectives: {self.objectives}")
         logger.info(f"Test vars: {self.test_variables}")
@@ -507,7 +504,7 @@ class AsyncioQueue:
 class EchoIOC(SoftIOC):
     """Soft IOC that mirror SE values"""
 
-    def __init__(self, channels: list[str], sim_engine: SimulationEngine):
+    def __init__(self, channels: list[str], sim_engine: SignalEngine):
         super().__init__()
         self.se = sim_engine
         self.channels = channels
@@ -629,7 +626,7 @@ class EchoIOC(SoftIOC):
 class EchoIOCV2(SoftIOC):
     """Soft IOC that mirror SE values"""
 
-    def __init__(self, channels: list[str], sim_engine: SimulationEngine):
+    def __init__(self, channels: list[str], sim_engine: SignalEngine):
         super().__init__()
         self.se = sim_engine
         self.channels = channels

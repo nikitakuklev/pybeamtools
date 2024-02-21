@@ -6,7 +6,7 @@ from enum import Enum, auto
 from functools import total_ordering
 from typing import Any, Callable, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Extra, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .models import TimeAwareModel, VirtualDevice
 from .errors import (
@@ -17,7 +17,6 @@ from .errors import (
 )
 from .rpn import RPNCalc
 from ..controls.pv import PVOptions, WriteResponse
-from ..utils.pydantic import JSON_ENCODERS
 
 __all__ = [
     "TRIG",
@@ -72,6 +71,8 @@ class OP(Enum):
 
 @total_ordering
 class Event:
+    """Event object to be used for communication between devices and signal engine"""
+
     def __init__(
         self,
         op: OP,
@@ -126,9 +127,9 @@ class Result:
 
 class SignalContext:
     def __init__(self, se):
-        from .core import SimulationEngine
+        from .core import SignalEngine
 
-        self.se: SimulationEngine = se
+        self.se: SignalEngine = se
         self.add_device = self.se.add_device
 
     def issue_update(self, device: "EngineDevice", data: dict[str, DataT]):
@@ -314,6 +315,7 @@ class EchoDevice(EngineDevice):
     device_type: str = "echo"
 
     def __init__(self, options: EchoDeviceOptions, ctx: SignalContext = None):
+        """ Create an echo device, which simply returns the data it was given """
         self.options = options
         channel_map = {k: {} for k in options.data.keys()}
         super().__init__(
@@ -680,7 +682,7 @@ class RPNEngineDevice(EngineDevice):
         extra_variables = {k: aux_dict[k] for k in self.missing_tokens}
         rpn.add_variables(extra_variables)
         rpn.push(rpn_exp)
-        assert len(rpn.stack) == 1, f"RPN length incorrect"
+        assert len(rpn.stack) == 1, "RPN length incorrect"
         self.value = rpn.stack[0]
         return {self.options.name: self.value}
 

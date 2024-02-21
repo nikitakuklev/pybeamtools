@@ -8,7 +8,7 @@ from pybeamtools.controls.control_lib import ConnectionOptions
 from pybeamtools.controls.errors import ControlLibException, InterlockWriteError, InvalidWriteError, \
     SecurityError
 from pybeamtools.controls.network import PVOptions, SimPV
-from pybeamtools.sim.core import SignalEngineOptions, SimulationEngine
+from pybeamtools.sim.core import SignalEngineOptions, SignalEngine
 from pybeamtools.sim.pddevices import EchoDevice, EchoDeviceOptions, ModelPairDevice, \
     ModelPairDeviceOptions, SignalContext
 from sim.devices import RealisticModel, RealisticModelOptions
@@ -24,14 +24,14 @@ def fixed_time():
 
 class TestSimPV:
     @pytest.fixture
-    def sim_engine(self) -> SimulationEngine:
-        sim = SimulationEngine(SignalEngineOptions(time_function=fixed_time))
+    def sim_engine(self) -> SignalEngine:
+        sim = SignalEngine(SignalEngineOptions(time_function=fixed_time))
         sim.TRACE = True
         sim.TIME_TRACE = True
         return sim
 
     @pytest.fixture
-    def sim_engine_with_models(self, sim_engine: SimulationEngine) -> SimulationEngine:
+    def sim_engine_with_models(self, sim_engine: SignalEngine) -> SignalEngine:
         ctx = SignalContext(se=sim_engine)
         echo1 = EchoDevice(EchoDeviceOptions(name='echo1', data={'ECHO:1': 5.0}))
         mag1model = RealisticModel(RealisticModelOptions(name='mag1model', value=0.5), t)
@@ -73,7 +73,7 @@ class TestSimPV:
     #     acc.add_pv_object([pv, pv2, pv3])
     #     return sim_engine, acc, pv, pv2, pv3
 
-    def test_pv_sim(self, sim_engine_with_models: SimulationEngine):
+    def test_pv_sim(self, sim_engine_with_models: SignalEngine):
         ao = pc.AcceleratorOptions(connection_settings=ConnectionOptions(network='dummy'))
         acc = pc.Accelerator(options=ao, ctx=sim_engine_with_models)
         acc.TRACE = True

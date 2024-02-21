@@ -8,7 +8,7 @@ from pybeamtools.controls.errors import SecurityError
 from pybeamtools.controls import Accelerator, AcceleratorOptions, ConnectionOptions, PVAccess, \
     PVOptions
 from pybeamtools.sim.softioc import SimpleIOC
-from pybeamtools.sim.core import SignalEngineOptions, SimulationEngine
+from pybeamtools.sim.core import SignalEngineOptions, SignalEngine
 from pybeamtools.sim.pddevices import DS, EPICSDevice, EPICSDeviceOptions, EchoDevice, \
     EchoDeviceOptions, \
     ProxyDevice, \
@@ -37,8 +37,8 @@ def accelerator():
 
 
 @pytest.fixture
-def sim_engine_realtime() -> SimulationEngine:
-    sim = SimulationEngine(SignalEngineOptions(time_function=time.time))
+def sim_engine_realtime() -> SignalEngine:
+    sim = SignalEngine(SignalEngineOptions(time_function=time.time))
     sim.TRACE = True
     sim.TIME_TRACE = True
     return sim
@@ -159,7 +159,7 @@ def simple_soft_ioc():
 
 
 @pytest.fixture(autouse=False)
-def sim_engine_with_pvs(sim_engine_realtime) -> tuple[SimulationEngine, Accelerator]:
+def sim_engine_with_pvs(sim_engine_realtime) -> tuple[SignalEngine, Accelerator]:
     sim = sim_engine_realtime
     ao = AcceleratorOptions(connection_settings=ConnectionOptions(network='epics'))
     acc = Accelerator(options=ao, ctx=None)

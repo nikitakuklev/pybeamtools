@@ -3,7 +3,7 @@ import time
 
 import numpy as np
 import pytest
-from pybeamtools.sim.core import SignalEngineOptions, SimulationEngine
+from pybeamtools.sim.core import SignalEngineOptions, SignalEngine
 from pybeamtools.sim.templates import MockSetupPairDevice
 
 t = 0.0
@@ -16,16 +16,16 @@ def fixed_time():
 
 
 @pytest.fixture
-def sim_engine() -> SimulationEngine:
-    sim = SimulationEngine(SignalEngineOptions(time_function=fixed_time))
+def sim_engine() -> SignalEngine:
+    sim = SignalEngine(SignalEngineOptions(time_function=fixed_time))
     sim.TRACE = True
     sim.TIME_TRACE = True
     return sim
 
 
 @pytest.fixture
-def sim_engine_realtime() -> SimulationEngine:
-    sim = SimulationEngine(SignalEngineOptions(time_function=time.time))
+def sim_engine_realtime() -> SignalEngine:
+    sim = SignalEngine(SignalEngineOptions(time_function=time.time))
     sim.TRACE = True
     sim.TIME_TRACE = True
     return sim

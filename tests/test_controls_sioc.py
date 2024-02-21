@@ -11,7 +11,7 @@ from pybeamtools.controls import ConnectionOptions, PVAccess, \
     PVOptions
 from pybeamtools.controls.errors import InterlockWriteError, SecurityError
 from pybeamtools.controls.interlocks import LimitInterlock, LimitInterlockOptions
-from pybeamtools.sim.core import SignalEngineOptions, SimulationEngine
+from pybeamtools.sim.core import SignalEngineOptions, SignalEngine
 from pybeamtools.sim.softioc import EchoIOC, SimpleIOC
 from pybeamtools.sim.templates import MockSetupPairDevice
 import pybeamtools.controls as pc
@@ -19,7 +19,7 @@ import pytest
 from pybeamtools.controls import Accelerator, AcceleratorOptions, ConnectionOptions, PVAccess, \
     PVOptions
 from pybeamtools.controls.errors import SecurityError
-from pybeamtools.sim.core import SignalEngineOptions, SimulationEngine
+from pybeamtools.sim.core import SignalEngineOptions, SignalEngine
 from pybeamtools.sim.errors import DeviceWriteError
 from pybeamtools.sim.pddevices import DS, EPICSDevice, EPICSDeviceOptions, EchoDevice, \
     EchoDeviceOptions, ProxyDevice, ProxyDeviceOptions, TRIG
@@ -184,8 +184,8 @@ class TestEPICSPV:
 
     @pytest.fixture
     def f_sim_rt_noscan(self):
-        sim = SimulationEngine(SignalEngineOptions(time_function=time.time,
-                                                   update_thread_name='simaccupd'))
+        sim = SignalEngine(SignalEngineOptions(time_function=time.time,
+                                               update_thread_name='simaccupd'))
         sim.TRACE = True
         sim.TIME_TRACE = True
         sim.txid = 50000
@@ -204,12 +204,12 @@ class TestEPICSPV:
         return sim
 
     @pytest.fixture
-    def f_acc_and_sim_with_pvs(self) -> tuple[Accelerator, SimulationEngine]:
+    def f_acc_and_sim_with_pvs(self) -> tuple[Accelerator, SignalEngine]:
         ao = AcceleratorOptions(connection_settings=ConnectionOptions(network='epics'))
         acc = Accelerator(options=ao)
         acc.TRACE = True
 
-        sim = SimulationEngine(SignalEngineOptions(time_function=time.time))
+        sim = SignalEngine(SignalEngineOptions(time_function=time.time))
         sim.TRACE = True
         sim.TIME_TRACE = True
 
@@ -283,8 +283,8 @@ class TestEPICSPV:
         os.environ['EPICS_CA_AUTO_ADDR_LIST'] = 'NO'
         os.environ['EPICS_CA_ADDR_LIST'] = '127.0.0.1'
 
-        sim = SimulationEngine(SignalEngineOptions(time_function=time.time,
-                                                   update_thread_name='simaccupd'))
+        sim = SignalEngine(SignalEngineOptions(time_function=time.time,
+                                               update_thread_name='simaccupd'))
         sim.TRACE = True
         sim.TIME_TRACE = True
         sim.txid = 50000

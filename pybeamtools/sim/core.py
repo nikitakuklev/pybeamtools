@@ -217,7 +217,7 @@ class SignalEngineOptions(SerializableBaseModel):
     update_thread_name: str = "simupd"
 
 
-class SimulationEngine:
+class SignalEngine:
     def __init__(self, options: SignalEngineOptions):
         config_root_logging()
         self.options = self.o = options
@@ -292,8 +292,12 @@ class SimulationEngine:
             t = self.time_fun()
             return t
         except Exception as ex:
-            self.logger.error(f"Time function failed", exc_info=sys.exc_info())
+            self.logger.error("Time function failed", exc_info=sys.exc_info())
             raise ex
+
+    def trace(self, msg):
+        if self.TRACE:
+            self.logger.debug(msg)
 
     def summarize(self):
         s = ""
@@ -541,16 +545,10 @@ class SimulationEngine:
         with self.settings_lock:
             self.ensure_channel_exists(cn)
             dn = self.channel_to_device_name[cn]
-            ev = Event(
-                op=OP.READ,
-                dn=dn,
-                txid=self.next_txid(),
-                t_event=self.time(),
-                data={cn: None},
-            )
+            ev = self.next_event(op=OP.READ, dn=dn, data={cn: None})
             f = self.get_future_for_event(ev)
             if self.TRACE:
-                self.logger.debug(f"{ev.uuid} | Read request event for C({cn}) added")
+                self.logger.debug(f"{ev.uuid} | Read event for C({cn}) added")
         try:
             result = self.await_future(f, timeout=timeout)
         except DeviceEventTimeout as ex:
@@ -561,33 +559,27 @@ class SimulationEngine:
             raise result.data
         return result.data[cn]
 
-    def read_channel_now(self, channel_name: str, timeout: float = 5.0) -> DataT:
-        """Read from channel immediately"""
+    def read_channel_now(self, cn: str, timeout: float = 5.0) -> DataT:
+        """
+        Read from channel immediately
+        """
         with self.settings_lock:
-            self.ensure_channel_exists(channel_name)
-            dn = self.channel_to_device_name[channel_name]
-            ev = Event(
-                op=OP.READ_NOW,
-                dn=dn,
-                txid=self.next_txid(),
-                t_event=self.time(),
-                data={channel_name: None},
-            )
+            self.ensure_channel_exists(cn)
+            dn = self.channel_to_device_name[cn]
+            ev = self.next_event(op=OP.READ_NOW, dn=dn, data={cn: None})
             f = self.get_future_for_event(ev)
-            self.logger.debug(
-                f"{ev.uuid} | Read now request event for C({channel_name}) added"
-            )
+            logger.debug(f"{ev.uuid} | Read now event for C({cn}) added")
         try:
             result = self.await_future(f, timeout=timeout)
         except DeviceEventTimeout as ex:
-            self.logger.debug(f"{ev.uuid} | Read now event ({ev.data=}) timeout")
+            logger.debug(f"{ev.uuid} | Read now event ({ev.data=}) timeout")
             raise ex
-        self.logger.debug(f"{ev.uuid} | Read now event ({result=})")
+        logger.debug(f"{ev.uuid} | Read now event ({result=})")
         if isinstance(result.data, Exception):
             raise result.data
-        return result.data[channel_name]
+        return result.data[cn]
 
-    def read(self, channels: list[str], include_timestamps=False):
+    def read_channels(self, channels: list[str], include_timestamps=False):
         data = {}
         for i, cn in enumerate(channels):
             data[cn] = self.read_channel(cn)
@@ -668,8 +660,7 @@ class SimulationEngine:
                 value = data
             value_dict[cn] = value
 
-        if self.TRACE:
-            self.logger.debug(f"FR result: ({value_dict})")
+        self.trace(f"FR result: ({value_dict})")
         return value_dict
 
     def write_channel(self, channel_name: str, value: DataT, timeout: float = 10.0):
@@ -678,11 +669,9 @@ class SimulationEngine:
         with self.settings_lock:
             self.ensure_channel_exists(channel_name)
             dn = self.channel_to_device_name[channel_name]
-            ev = Event(
+            ev = self.next_event(
                 op=OP.WRITE,
                 dn=dn,
-                txid=self.next_txid(),
-                t_event=self.time(),
                 data={channel_name: value},
             )
             f = self.get_future_for_event(ev)
@@ -780,10 +769,7 @@ class SimulationEngine:
                     self.logger.debug(f"WAV: {cn}={val:+.5f} ({setp=:+.5f}) finished")
                 else:
                     margin = (rtol_map[cn] * abs(setp)) + atol_map[cn]
-                    if self.TRACE:
-                        self.logger.debug(
-                            f"WAV: ({cn})=({val:+.5f}) ({setp=:+.5f}) ({margin=})"
-                        )
+                    self.trace(f"WAV: ({cn})=({val:+.5f}) ({setp=:+.5f}) ({margin=})")
             if len(rb_results) == len(data_dict):
                 break
             dt = time.perf_counter() - t_start
@@ -857,6 +843,16 @@ class SimulationEngine:
             self.txid += 1000
             return txid
 
+    def next_event(
+        self, op: OP, dn: str, txid: int = None, t_event: float = None, **kwargs
+    ) -> Event:
+        if txid is None:
+            txid = self.next_txid()
+        if t_event is None:
+            t_event = self.time()
+        ev = Event(op=op, dn=dn, txid=txid, t_event=t_event, **kwargs)
+        return ev
+
     def push_update(
         self,
         dev: EngineDevice,
@@ -876,8 +872,7 @@ class SimulationEngine:
         #         f'Channel ({k}) not registered to ({dev.name})'
         t_run = self.time()
         ev = Event(op=OP.UPDATE_PUSH, dn=dn, txid=txid, t_event=t_run, data=data.copy())
-        if self.TRACE:
-            self.logger.debug(f"{ev.uuid} | Pushing D({dev.name}) update ({data})")
+        self.trace(f"{ev.uuid} | Pushing D({dev.name}) update ({data})")
         f = self.get_future_for_event(ev)
         if timeout > 0.0:
             result = self.await_future(f, timeout=timeout)
@@ -912,19 +907,18 @@ class SimulationEngine:
         return result
 
     def get_future_for_event(self, ev: Event, skip_cb: bool = False) -> Future:
+        """Submit event to queue and return future"""
         f = Future()
 
         if not skip_cb:
 
             def cb(r):
-                if self.TRACE:
-                    self.logger.debug(f"{ev.uuid} | Future callback with ({r=})")
+                self.trace(f"{ev.uuid} | Future callback with ({r=})")
                 f.set_result(r)
 
             ev.set_cb(cb)
         self.event_q.put(ev)
-        if self.TRACE:
-            self.logger.debug(f"{ev.uuid} | Event ({ev.op=}) for ({ev.dn=}) submitted")
+        self.trace(f"{ev.uuid} | Event ({ev.op=}) for ({ev.dn=}) submitted")
 
         # try:
         #     success = read_done_event.wait(1.5)
@@ -987,14 +981,12 @@ class SimulationEngine:
                     )
                     dev = self.devices_map[dn]
                     try:
-                        if self.TRACE:
-                            self.logger.debug(
-                                f"{ev.uuid} | Scan ({dn}) at scheduled time ({t_scheduled})"
-                            )
+                        self.trace(
+                            f"{ev.uuid} | Scan ({dn}) at scheduled time ({t_scheduled})"
+                        )
                         self.check_enabled_state(dn)
                         r = dev.scan(ev)
-                        if self.TRACE:
-                            self.logger.debug(f"{ev.uuid} | Scan result ({r})")
+                        self.trace(f"{ev.uuid} | Scan result ({r})")
                         evx = Event(
                             op=OP.UPDATE_PROP,
                             dn=dn,
@@ -1037,31 +1029,26 @@ class SimulationEngine:
                         self.logger.debug(f"Time step done ({i} cycles)")
                     break
                 else:
-                    if self.TIME_TRACE:
-                        self.logger.debug(
-                            f"Devices to process: {sorted_triggered_devices}"
-                        )
+                    self.trace(f"Devices to process: {sorted_triggered_devices}")
 
                 t_scheduled, dn = sorted_triggered_devices[0]
                 try:
                     t_run = self.time()
                     t_start_walltime = time.perf_counter()
                     ev = Event(op=OP.SCAN, dn=dn, txid=self.next_txid(), t_event=t_run)
-                    if self.TRACE:
-                        self.logger.debug(
-                            f"{ev.uuid} | {ev.op=} {ev.dn=} {ev.data=} {ev.t_event=}"
-                        )
+                    self.trace(
+                        f"{ev.uuid} | {ev.op=} {ev.dn=} {ev.data=} {ev.t_event=}"
+                    )
                     dev = self.devices_map[dn]
                     try:
                         # if self.TRACE:
                         #     self.logger.debug(f'{ev.uuid} | Scan ({dn}) at time ({t_run})')
                         self.check_enabled_state(dn)
                         r = dev.scan(ev)
-                        if self.TRACE:
-                            self.logger.debug(
-                                f"{ev.uuid} | Scan ({dn}) at ({t_run:.4f}): result "
-                                f"({r})"
-                            )
+                        self.trace(
+                            f"{ev.uuid} | Scan ({dn}) at ({t_run:.4f}): result "
+                            f"({r})"
+                        )
                         if len(r) > 0:
                             assert (isinstance(v, float) for v in r.values())
                             assert all(k in self.channels for k in r)
@@ -1076,10 +1063,9 @@ class SimulationEngine:
                             )
                             self._propagate_update_event(t_run, dn, evx)
                         else:
-                            if self.TRACE:
-                                self.logger.debug(
-                                    f"{ev.uuid} | No scan data, skipping propagation"
-                                )
+                            self.trace(
+                                f"{ev.uuid} | No scan data, skipping propagation"
+                            )
                         ev.cb(Result(t_run, r, True))
                     except DeviceDisabledError as ex:
                         self.logger.debug(f"{ev.uuid} | Scan of disabled device ({dn})")
@@ -1104,6 +1090,9 @@ class SimulationEngine:
         self.last_scan_threshold = threshold_time
 
     def _scan_thread(self, command_queue: queue.Queue):
+        """
+        Main scan thread
+        """
         t = self.time()
         self.logger.debug(
             f"Hello from scan thread (id {threading.get_ident()}) at ({t=})"
@@ -1121,27 +1110,27 @@ class SimulationEngine:
                     skip = False
                     break
             if not skip:
-                if self.TRACE:
-                    self.logger.debug(f"Scan loop ({i=}) at ({threshold_time=})")
+                self.trace(f"Scan loop ({i=}) at ({threshold_time=})")
                 self.scan_now(threshold_time)
             time.sleep(0)
             try:
                 cmd = command_queue.get(timeout=0.02)
                 if cmd is None:
-                    self.logger.debug(f"Goodbye from scan thread")
+                    self.logger.debug("Goodbye from scan thread")
                     break
             except queue.Empty:
                 time.sleep(0)
 
     def start_scan_thread(self, reset_update_time: bool = True):
+        """Start the scan thread"""
         if self.is_running:
-            raise SimulationError(f"Scan thread is already running")
+            raise SimulationError("Scan thread is already running")
         if reset_update_time:
             now = self.time()
             for dn in self.scan_periods:
                 self.next_scan_time[dn] = now
         self.cmdq = queue.Queue()
-        self.logger.debug(f"Starting scan thread")
+        self.logger.debug("Starting scan thread")
         th = threading.Thread(
             target=self._scan_thread, name="sim_engine_scan", args=(self.cmdq,)
         )
@@ -1151,8 +1140,9 @@ class SimulationEngine:
         self.poll_thread = th
 
     def stop_scan_thread(self):
+        """Stop the scan thread"""
         if not self.is_running:
-            raise SimulationError(f"No thread to stop")
+            raise SimulationError("No thread to stop")
         self.cmdq.put(None)
         self.poll_thread.join(timeout=1.0)
 
@@ -1170,10 +1160,9 @@ class SimulationEngine:
                 with self.settings_lock:
                     t_process = self.time()
                     t1 = time.perf_counter()
-                    if self.TRACE:
-                        self.logger.debug(
-                            f"{ev.uuid} | {ev.op=} {ev.dn=} {ev.data=} {ev.t_event=}"
-                        )
+                    self.trace(
+                        f"{ev.uuid} | {ev.op=} {ev.dn=} {ev.data=} {ev.t_event=}"
+                    )
                     if ev.txid in self.set_seen_txids:
                         raise SimulationError(f"Event {ev.txid} already seen")
                     else:
@@ -1206,8 +1195,7 @@ class SimulationEngine:
                             self.logger.debug(f"{ev.uuid} | Push error ({ex})")
                             self.logger.debug(f"{ev.uuid} | {traceback.format_exc()}")
                             ev.cb(Result(t_process, ex, False))
-                        if self.TRACE:
-                            self.logger.debug(f"{ev.uuid} | === Push done ===")
+                        self.trace(f"{ev.uuid} | === Push done ===")
                     elif ev.op == OP.UPDATE_PROP:
                         if self.TRACE:
                             self.logger.debug(
@@ -1215,8 +1203,7 @@ class SimulationEngine:
                                 f"({t_process})"
                             )
                         self._propagate_callbacks(t_process, dn, ev)
-                        if self.TRACE:
-                            self.logger.debug(f"{ev.uuid} | === Propagate done ===")
+                        self.trace(f"{ev.uuid} | === Propagate done ===")
                     elif ev.op == OP.UPDATE:
                         # Request new channel values for updated deps
                         dev = self.devices_map[ev.dn]
@@ -1229,17 +1216,14 @@ class SimulationEngine:
                             for cn, v in ev.data.items():
                                 self.ensure_channel_exists(cn)
                                 self.check_deps_satisfied(cn, data_required=False)
-                            if self.TRACE:
-                                self.logger.debug(
-                                    f"{ev.uuid} | Update ({ev.data}) at ({t_process})"
-                                )
+                            self.trace(
+                                f"{ev.uuid} | Update ({ev.data}) at ({t_process})"
+                            )
                             r = dev.update(ev, aux_dict=ev.data)
-                            if self.TRACE:
-                                self.logger.debug(f"{ev.uuid} | Update result ({r})")
-                            evx = Event(
+                            self.trace(f"{ev.uuid} | Update result ({r})")
+                            evx = self.next_event(
                                 op=OP.UPDATE_PROP,
                                 dn=dn,
-                                txid=self.next_txid(),
                                 t_event=t_process,
                                 data=r,
                                 root=ev.root,
@@ -1264,8 +1248,7 @@ class SimulationEngine:
                             self.logger.debug(f"{ev.uuid} | Update error ({ex})")
                             self.logger.debug(f"{ev.uuid} | {traceback.format_exc()}")
                             ev.cb(Result(t_process, ex, False))
-                        if self.TRACE:
-                            self.logger.debug(f"{ev.uuid} | === Update done ===")
+                        self.trace(f"{ev.uuid} | === Update done ===")
                     elif ev.op == OP.WRITE:
                         dev = self.devices_map[ev.dn]
                         try:
@@ -1276,14 +1259,12 @@ class SimulationEngine:
                             for cn, v in ev.data.items():
                                 self.ensure_channel_exists(cn)
                                 self.check_deps_satisfied(cn)
-                            if self.TRACE:
-                                self.logger.debug(
-                                    f"{ev.uuid} | Write ({ev.data}) at ({t_process})"
-                                )
+                            self.trace(
+                                f"{ev.uuid} | Write ({ev.data}) at ({t_process})"
+                            )
                             r = dev.write(ev, ev.data, aux_dict)
 
-                            if self.TRACE:
-                                self.logger.debug(f"{ev.uuid} | Write result ({r})")
+                            self.trace(f"{ev.uuid} | Write result ({r})")
                             if r is None or len(r) == 0:
                                 self.logger.warning(
                                     f"{ev.uuid} | No write update data?"
@@ -1314,8 +1295,7 @@ class SimulationEngine:
                             self.logger.debug(f"{ev.uuid} | Write error ({ex})")
                             self.logger.debug(f"{ev.uuid} | {traceback.format_exc()}")
                             ev.cb(Result(t_process, ex, False))
-                        if self.TRACE:
-                            self.logger.debug(f"{ev.uuid} | === Write done ===")
+                        self.trace(f"{ev.uuid} | === Write done ===")
                     elif ev.op == OP.READ:
                         dev = self.devices_map[ev.dn]
                         try:
@@ -1325,10 +1305,9 @@ class SimulationEngine:
                             self.ensure_channel_exists(cn)
                             self.check_deps_satisfied(cn, data_required=False)
                             value = dev.read(ev, cn)
-                            if self.TRACE:
-                                self.logger.debug(
-                                    f"{ev.uuid} | Read ({cn})=({value}) at ({t_process})"
-                                )
+                            self.trace(
+                                f"{ev.uuid} | Read ({cn})=({value}) at ({t_process})"
+                            )
                             ev.cb(Result(t_process, {cn: value}, True))
                         except DeviceDisabledError as ex:
                             self.logger.debug(
@@ -1340,8 +1319,7 @@ class SimulationEngine:
                             self.logger.debug(f"{ev.uuid} | Read error ({ex})")
                             self.logger.debug(f"{ev.uuid} | {traceback.format_exc()}")
                             ev.cb(Result(t_process, ex, False))
-                        if self.TRACE:
-                            self.logger.debug(f"{ev.uuid} | === Read done ===")
+                        self.trace(f"{ev.uuid} | === Read done ===")
                     elif ev.op == OP.READ_NOW:
                         dev = self.devices_map[ev.dn]
                         try:
@@ -1351,10 +1329,9 @@ class SimulationEngine:
                             self.ensure_channel_exists(cn)
                             self.check_deps_satisfied(cn, data_required=False)
                             value = dev.read_now(ev, cn)
-                            if self.TRACE:
-                                self.logger.debug(
-                                    f"{ev.uuid} | Read now ({cn})=({value}) at ({t_process})"
-                                )
+                            self.trace(
+                                f"{ev.uuid} | Read now ({cn})=({value}) at ({t_process})"
+                            )
                             # New data, actually propagate it
                             evx = Event(
                                 op=OP.UPDATE_PROP,
@@ -1377,8 +1354,7 @@ class SimulationEngine:
                             self.logger.debug(f"{ev.uuid} | Read now error ({ex})")
                             self.logger.debug(f"{ev.uuid} | {traceback.format_exc()}")
                             ev.cb(Result(t_process, ex, False))
-                        if self.TRACE:
-                            self.logger.debug(f"{ev.uuid} | === Read now done ===")
+                        self.trace(f"{ev.uuid} | === Read now done ===")
                 update_q.task_done()
                 dt = time.perf_counter() - t1
                 self.event_count += 1
@@ -1388,11 +1364,11 @@ class SimulationEngine:
                 try:
                     cmd = command_q.get(block=False)
                     if cmd is None:
-                        self.logger.debug(f"Goodbye from update thread")
+                        self.logger.debug("Goodbye from update thread")
                         break
                 except queue.Empty:
                     pass
-            except Exception as ex:
+            except Exception:
                 update_q.task_done()
                 self.update_thread_running = False
                 self.logger.error(
@@ -1407,8 +1383,7 @@ class SimulationEngine:
         dev = self.devices_map[dn]
         try:
             dev.state = DS.STARTING_UP
-            if self.TRACE:
-                self.logger.debug(f"{ev.uuid} | Enable ({dn=}) at ({t_run})")
+            self.trace(f"{ev.uuid} | Enable ({dn=}) at ({t_run})")
 
             for cn in self.dev_channels_map[dn]:
                 self.ensure_channel_exists(cn)
@@ -1418,8 +1393,7 @@ class SimulationEngine:
             r = dev.update(ev, aux_dict=deps_data)
             dev.state = DS.ENABLED
             self.next_scan_time[dn] = t_run + self.scan_periods[dn]
-            if self.TRACE:
-                self.logger.debug(f"{ev.uuid} | Enable result ({r})")
+            self.trace(f"{ev.uuid} | Enable result ({r})")
             evx = Event(
                 op=OP.UPDATE_PROP,
                 dn=dn,
@@ -1431,8 +1405,7 @@ class SimulationEngine:
             )
             self._propagate_update_event(t_run, dn, evx)
             ev.cb(Result(t_run, r, success=True))
-            if self.TRACE:
-                self.logger.debug(f"{ev.uuid} | Enable done")
+            self.trace(f"{ev.uuid} | Enable done")
         except DeviceDependencyError as ex:
             dev.state = DS.ERROR_DEPENDENCIES
             self.logger.debug(f"{ev.uuid} | Enable deps error ({ex})")
@@ -1463,8 +1436,7 @@ class SimulationEngine:
         for cn, v in ev.data.items():
             if cn not in self.channel_subs:
                 continue
-            if self.TRACE:
-                self.logger.debug(f"{ev.uuid} | Invoking subs for ({cn})=({v})")
+            self.trace(f"{ev.uuid} | Invoking subs for ({cn})=({v})")
             self.channel_subs[cn].process_update(v)
 
         dn_list = []
@@ -1623,9 +1595,9 @@ class SimulationEngine:
 
     def start_update_thread(self):
         if self.update_thread_running:
-            raise SimulationError(f"Update thread is already running")
+            raise SimulationError("Update thread is already running")
         if self.TRACE:
-            self.logger.debug(f"Starting update thread")
+            self.logger.debug("Starting update thread")
         th = threading.Thread(
             target=self._update_thread,
             name=self.options.update_thread_name,
@@ -1638,7 +1610,7 @@ class SimulationEngine:
 
     def stop_update_thread(self):
         if not self.update_thread_running:
-            raise SimulationError(f"No thread to stop")
+            raise SimulationError("No thread to stop")
         self.event_command_q.put(None)
         self.poll_thread.join(timeout=1.0)
         self.update_thread = None

@@ -6,7 +6,7 @@ import time
 import numpy as np
 import pytest
 
-from pybeamtools.sim.core import SignalEngineOptions, SimulationEngine
+from pybeamtools.sim.core import SignalEngineOptions, SignalEngine
 from pybeamtools.sim.models import RealisticModel, RealisticModelOptions
 from pybeamtools.sim.errors import DeviceDependencyError, DeviceError, ReadTimeoutError, \
     SimulationError, \
@@ -45,23 +45,23 @@ def fixed_time():
 
 
 @pytest.fixture
-def sim_engine() -> SimulationEngine:
-    sim = SimulationEngine(SignalEngineOptions(time_function=fixed_time))
+def sim_engine() -> SignalEngine:
+    sim = SignalEngine(SignalEngineOptions(time_function=fixed_time))
     sim.TRACE = True
     sim.TIME_TRACE = True
     return sim
 
 
 @pytest.fixture
-def sim_engine_realtime() -> SimulationEngine:
-    sim = SimulationEngine(SignalEngineOptions(time_function=time.time))
+def sim_engine_realtime() -> SignalEngine:
+    sim = SignalEngine(SignalEngineOptions(time_function=time.time))
     sim.TRACE = True
     sim.TIME_TRACE = True
     return sim
 
 
 @pytest.fixture
-def sim_engine_with_devices(sim_engine) -> SimulationEngine:
+def sim_engine_with_devices(sim_engine) -> SignalEngine:
     echo1 = ED(EDO(name='echo1', data={'TEST:ECHO:1': 5}))
     echo2 = ED(EDO(name='echo2', data={'TEST:ECHO:2': 15}))
     echo3 = ED(EDO(name='echo3', data={'TEST:ECHO:3': 25}))
@@ -106,7 +106,7 @@ def test_device_add(sim_engine):
         sim_engine.read_channel('TEST:ECHO:1')
 
 
-def test_device_read(sim_engine: SimulationEngine):
+def test_device_read(sim_engine: SignalEngine):
     ctx = SignalContext(se=sim_engine)
     echo1 = ED(EDO(name='echo1', data={'TEST:ECHO:1': 5.0}))
     echo2 = ED(EDO(name='echo2', data={'TEST:ECHO:2': 15.0}))
@@ -125,7 +125,7 @@ def test_device_read(sim_engine: SimulationEngine):
     assert echo1.stats == sd({'update': 1, 'read': 1, 'enable': 1})
 
 
-def test_device_read_now(sim_engine: SimulationEngine):
+def test_device_read_now(sim_engine: SignalEngine):
     echo1 = ED(EDO(name='echo1', data={'TEST:ECHO:1': 5.0}))
     echo2 = ED(EDO(name='echo2', data={'TEST:ECHO:2': 15.0}))
     sim_engine.add_device(echo1)
@@ -142,7 +142,7 @@ def test_device_read_now(sim_engine: SimulationEngine):
     assert echo1.stats == sd({'update': 1, 'enable': 1, 'read_now': 1})
 
 
-def test_device_write(sim_engine: SimulationEngine):
+def test_device_write(sim_engine: SignalEngine):
     ctx = SignalContext(se=sim_engine)
     echo1 = ED(EDO(name='echo1', data={'TEST:ECHO:1': 5.0}))
     ctx.add_device(echo1)
@@ -159,7 +159,7 @@ def test_device_write(sim_engine: SimulationEngine):
     assert echo1.stats == sd({'update': 1, 'read': 1, 'write': 1, 'enable': 1})
 
 
-def test_device_scan(sim_engine: SimulationEngine):
+def test_device_scan(sim_engine: SignalEngine):
     t_local = 0.0
 
     def local_time():
@@ -199,7 +199,7 @@ def test_device_scan(sim_engine: SimulationEngine):
 
 # TODO: scan with no return
 
-def test_ordering(sim_engine: SimulationEngine):
+def test_ordering(sim_engine: SignalEngine):
     echo1 = ED(EDO(name='echo1', data={'TEST:ECHO:1': 5.0}))
     sim_engine.add_device(echo1)
     sim_engine.enable_device(echo1)
@@ -209,7 +209,7 @@ def test_ordering(sim_engine: SimulationEngine):
         assert sim_engine.read_channel('TEST:ECHO:1') == i
 
 
-def test_adv_read(sim_engine: SimulationEngine):
+def test_adv_read(sim_engine: SignalEngine):
     t_local = 0.0
 
     def local_time():
@@ -280,7 +280,7 @@ def test_adv_read(sim_engine: SimulationEngine):
     assert list(data[channels[0]]) == [10.0, 11.0]
 
 
-def test_adv_write(sim_engine: SimulationEngine):
+def test_adv_write(sim_engine: SignalEngine):
     t_local = 0.0
 
     def local_time():
@@ -437,7 +437,7 @@ def test_adv_write(sim_engine: SimulationEngine):
     assert rb['MAG1'] is None
 
 
-def test_adv_write_rt(sim_engine_realtime: SimulationEngine):
+def test_adv_write_rt(sim_engine_realtime: SignalEngine):
     t_start = time.time()
     sim_engine = sim_engine_realtime
     ctx = SignalContext(se=sim_engine)
@@ -516,7 +516,7 @@ def test_adv_write_rt(sim_engine_realtime: SimulationEngine):
     th.join()
 
 
-def test_realtime(sim_engine_realtime: SimulationEngine):
+def test_realtime(sim_engine_realtime: SignalEngine):
     t_start = time.time()
     sim_engine = sim_engine_realtime
     # ctx = SignalContext(se=sim_engine)
@@ -554,7 +554,7 @@ def test_realtime(sim_engine_realtime: SimulationEngine):
     assert all([t_start < x[1].time < t_end for x in h.to_list()])
 
 
-def test_modeldevice(sim_engine: SimulationEngine):
+def test_modeldevice(sim_engine: SignalEngine):
     ctx = SignalContext(se=sim_engine)
     echo1 = ED(EDO(name='echo1', data={'TEST:ECHO:1': 5.0}))
     t = sim_engine.time()
@@ -572,7 +572,7 @@ def test_modeldevice(sim_engine: SimulationEngine):
     assert sim_engine.read_channel('mag1') == 1.5
 
 
-def test_modelpairdevice(sim_engine: SimulationEngine):
+def test_modelpairdevice(sim_engine: SignalEngine):
     ctx = SignalContext(se=sim_engine)
     echo1 = ED(EDO(name='echo1', data={'TEST:ECHO:1': 5.0}))
     t = 0.0
@@ -596,7 +596,7 @@ def test_modelpairdevice(sim_engine: SimulationEngine):
     assert sim_engine.read_channel('mag1rb') == 1.5
 
 
-def test_modelpair_scan(sim_engine: SimulationEngine):
+def test_modelpair_scan(sim_engine: SignalEngine):
     t_local = 0.0
 
     def local_time():
@@ -648,7 +648,7 @@ def test_modelpair_scan(sim_engine: SimulationEngine):
     assert len(h) == 1 + 7
 
 
-def test_modelpair_scan_rt(sim_engine: SimulationEngine):
+def test_modelpair_scan_rt(sim_engine: SignalEngine):
     def local_time():
         return time.time()
 
@@ -705,7 +705,7 @@ def test_modelpair_scan_rt(sim_engine: SimulationEngine):
     assert len(sim_engine.history_data['TEST:ECHO:1']) == 1 + 1 + 6
 
 
-def test_device_deps(sim_engine: SimulationEngine):
+def test_device_deps(sim_engine: SignalEngine):
     ctx = SignalContext(se=sim_engine)
     echo1 = ED(EDO(name='echo1', data={'TEST:ECHO:1': 5.0}))
     proxy1 = PD(PDO(name='proxy1', channel_map={
@@ -778,7 +778,7 @@ def test_device_deps(sim_engine: SimulationEngine):
     assert proxy2.aux_data == {'TEST:PROXY:1': 2.0}
 
 
-def test_device_deps_prop(sim_engine: SimulationEngine):
+def test_device_deps_prop(sim_engine: SignalEngine):
     ctx = SignalContext(se=sim_engine)
     echo1 = ED(EDO(name='echo1', data={'TEST:ECHO:1': 5.0}))
     proxy1 = PD(PDO(name='proxy1', channel_map={
@@ -805,7 +805,7 @@ def test_device_deps_prop(sim_engine: SimulationEngine):
     assert proxy2.stats == {'update': 1, 'read': 0, 'write': 0, 'scan': 0}
 
 
-def test_device_deps_err(sim_engine: SimulationEngine):
+def test_device_deps_err(sim_engine: SignalEngine):
     ctx = SignalContext(se=sim_engine)
     echo1 = ED(EDO(name='echo1', data={'TEST:ECHO:1': 5.0}))
     proxy1 = PD(PDO(name='proxy1', channel_map={'TEST:PROXY:1': {'TEST:ECHO:1': TRIG.PROPAGATE}}))
@@ -833,7 +833,7 @@ def test_device_deps_err(sim_engine: SimulationEngine):
     assert proxy2.aux_data == {'TEST:PROXY:1': 5.0}
 
 
-def test_device_deps_blank_init(sim_engine: SimulationEngine):
+def test_device_deps_blank_init(sim_engine: SignalEngine):
     ctx = SignalContext(se=sim_engine)
     echo1 = ED(EDO(name='echo1', data={'TEST:ECHO:1': 5.0}))
     proxy1 = PD(PDO(name='proxy1', channel_map={
@@ -873,7 +873,7 @@ def test_device_deps_blank_init(sim_engine: SimulationEngine):
     assert proxy2.aux_data == {'TEST:PROXY:1': 5.0}
 
 
-def test_device_set(sim_engine: SimulationEngine):
+def test_device_set(sim_engine: SignalEngine):
     ctx = SignalContext(se=sim_engine)
     echo1 = ED(EDO(name='echo1', data={'TEST:ECHO:1': 5}))
     echo2 = ED(EDO(name='echo2', data={'TEST:ECHO:2': 15}))
@@ -892,7 +892,7 @@ def test_device_set(sim_engine: SimulationEngine):
         assert sim_engine.read_channel('TEST:ECHO:1') == 10 + i
 
 
-def test_device_propagate(sim_engine_with_devices: SimulationEngine):
+def test_device_propagate(sim_engine_with_devices: SignalEngine):
     sim = sim_engine_with_devices
     for dev in sim.devices_list:
         assert dev.state == DS.CREATED

@@ -38,7 +38,7 @@ class VirtualDevice(Device):
     def __init__(self, name: str):
         super().__init__()
         if " " in name:
-            raise ValueError(f"Whitespace is not allowed in device name")
+            raise ValueError("Whitespace is not allowed in device name")
         self.name = name
 
     @abc.abstractmethod
@@ -443,7 +443,7 @@ class RealisticModel(TimeAwareModel):
     @time_last_call.setter
     def time_last_call(self, t):
         if t < self.last_known_t:
-            raise ValueError(f"Time went backwards!")
+            raise ValueError("Time went backwards!")
         self._time_last_call = self.last_known_t = t
 
     def read(self, t: float) -> float:
@@ -569,7 +569,7 @@ class RealisticModel(TimeAwareModel):
         events = self.advance_direct_to_time(t)
         if len(events) > 0:
             if len(events) > 1:
-                logger.warning(f"Multiple scan events detected - reduce step")
+                logger.warning("Multiple scan events detected - reduce step")
             return events[-1][1]
         else:
             return None

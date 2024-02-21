@@ -7,7 +7,7 @@ import pytest
 from pybeamtools.controls import Accelerator, AcceleratorOptions, ConnectionOptions, PVAccess, \
     PVOptions
 from pybeamtools.controls.errors import SecurityError
-from pybeamtools.sim.core import SignalEngineOptions, SimulationEngine
+from pybeamtools.sim.core import SignalEngineOptions, SignalEngine
 from pybeamtools.sim.errors import DeviceWriteError
 from pybeamtools.sim.pddevices import DS, EPICSDevice, EPICSDeviceOptions, EchoDevice, \
     EchoDeviceOptions, ProxyDevice, ProxyDeviceOptions, TRIG
@@ -28,8 +28,8 @@ EDO = EPICSDeviceOptions
 
 @pytest.fixture
 def f_acc_and_sim():
-    sim = SimulationEngine(SignalEngineOptions(time_function=time.time,
-                                               update_thread_name='simaccupd'))
+    sim = SignalEngine(SignalEngineOptions(time_function=time.time,
+                                           update_thread_name='simaccupd'))
     sim.TRACE = True
     sim.TIME_TRACE = True
     sim.txid = 50000
@@ -55,8 +55,8 @@ def f_acc_and_sim():
 
 @pytest.fixture
 def acc_and_sim_rt_noscan():
-    sim = SimulationEngine(SignalEngineOptions(time_function=time.time,
-                                               update_thread_name='simaccupd'))
+    sim = SignalEngine(SignalEngineOptions(time_function=time.time,
+                                           update_thread_name='simaccupd'))
     sim.TRACE = True
     sim.TIME_TRACE = True
     sim.txid = 50000
@@ -91,8 +91,8 @@ def acc_and_sim_rt_noscan():
 
 @pytest.fixture
 def acc_and_sim_rt_scan():
-    sim = SimulationEngine(SignalEngineOptions(time_function=time.time,
-                                               update_thread_name='simaccupd'))
+    sim = SignalEngine(SignalEngineOptions(time_function=time.time,
+                                           update_thread_name='simaccupd'))
     sim.TRACE = True
     sim.TIME_TRACE = True
     sim.txid = 50000
@@ -126,7 +126,7 @@ def acc_and_sim_rt_scan_simple():
     def fixed_time():
         return time.time()
 
-    simacc = SimulationEngine(SignalEngineOptions(time_function=fixed_time))
+    simacc = SignalEngine(SignalEngineOptions(time_function=fixed_time))
     simacc.TRACE = True
     simacc.TIME_TRACE = True
 
@@ -142,8 +142,8 @@ def acc_and_sim_rt_scan_simple():
 
 @pytest.fixture
 def mock_sim_engine_with_pvs(acc_and_sim_rt_noscan) -> tuple[
-    SimulationEngine, Accelerator, SimulationEngine]:
-    sim = SimulationEngine(SignalEngineOptions(time_function=time.time))
+    SignalEngine, Accelerator, SignalEngine]:
+    sim = SignalEngine(SignalEngineOptions(time_function=time.time))
     sim.TRACE = True
     sim.TIME_TRACE = True
 
@@ -178,8 +178,8 @@ def mock_sim_engine_with_pvs(acc_and_sim_rt_noscan) -> tuple[
 
 @pytest.fixture
 def mock_sim_engine_with_pvs_simple(acc_and_sim_rt_scan_simple) -> tuple[
-    SimulationEngine, Accelerator, SimulationEngine]:
-    sim = SimulationEngine(SignalEngineOptions(time_function=time.time))
+    SignalEngine, Accelerator, SignalEngine]:
+    sim = SignalEngine(SignalEngineOptions(time_function=time.time))
     sim.TRACE = True
     sim.TIME_TRACE = True
 
@@ -308,7 +308,7 @@ def test_epics_simulated(f_acc_and_sim):
     def fixed_time():
         return t
 
-    sim = SimulationEngine(SignalEngineOptions(time_function=fixed_time))
+    sim = SignalEngine(SignalEngineOptions(time_function=fixed_time))
     sim.TRACE = True
     sim.TIME_TRACE = True
 

@@ -5,8 +5,6 @@ This python script is published under the terms of the WTFPL.
 More information on: http://www.wtfpl.net/about/
 (Compatible with Python 3.7, 3.8, 3.9, 3.10 & 3.11)
 """
-import argparse
-import sys
 import math
 from itertools import chain
 import numpy as np
