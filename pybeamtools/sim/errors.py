@@ -49,8 +49,10 @@ class DeviceReadError(DeviceError):
 class DeviceScanError(DeviceError):
     pass
 
+
 class DeviceEnableError(DeviceError):
     pass
+
 
 class DeviceDisabledError(DeviceError):
     pass

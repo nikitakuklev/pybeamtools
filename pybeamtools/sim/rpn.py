@@ -482,7 +482,7 @@ def eval_rpn(s: str) -> float:
     rpn = RPNCalc()
     rpn.push(s)
     if len(rpn.stack) > 1 or len(rpn.stack) == 0:
-        raise ValueError(f'Stack {rpn.stack} is incorrect length')
+        raise ValueError(f"Stack {rpn.stack} is incorrect length")
     return rpn.stack[0]
 
 
@@ -530,12 +530,12 @@ class RPNCalc:
             "selt": self.selt,
         }
         self.ALL_OPS = list(
-                chain(
-                        self.THREE_ITEM_OPS.keys(),
-                        self.TWO_ITEM_OPS.keys(),
-                        self.ONE_ITEM_OPS.keys(),
-                        self.NO_ITEM_OPS.keys(),
-                )
+            chain(
+                self.THREE_ITEM_OPS.keys(),
+                self.TWO_ITEM_OPS.keys(),
+                self.ONE_ITEM_OPS.keys(),
+                self.NO_ITEM_OPS.keys(),
+            )
         )
 
     def validate_expression(self, input_buffer: str):
@@ -583,7 +583,11 @@ class RPNCalc:
         elif operator in self.THREE_ITEM_OPS:
             if len(self.stack) < 3:
                 raise InvalidOperationError(f"{operator}: Invalid stack length")
-            digit1, digit2, digit3 = self.stack.pop(), self.stack.pop(), self.stack.pop()
+            digit1, digit2, digit3 = (
+                self.stack.pop(),
+                self.stack.pop(),
+                self.stack.pop(),
+            )
             func = self.THREE_ITEM_OPS[operator]
             return func(digit1, digit2, digit3)
 
@@ -678,7 +682,7 @@ class RPNCalc:
             return [digit2 / digit1]
         except ZeroDivisionError:
             raise TwoDigitError(
-                    "divide: Division by Zero", digit1=digit1, digit2=digit2
+                "divide: Division by Zero", digit1=digit1, digit2=digit2
             )
 
     def e(self):
@@ -724,7 +728,7 @@ class RPNCalc:
 
     def power(self, digit1, digit2):
         "Raise the digit2 to the power of the digit1"
-        return [digit2 ** digit1]
+        return [digit2**digit1]
 
     def mod(self, digit1, digit2):
         "Remainder of the division"

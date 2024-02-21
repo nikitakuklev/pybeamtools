@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from pybeamtools.sim.core import SignalEngineOptions, SimulationEngine
-from pybeamtools.sim.devices import RealisticModel, RealisticModelOptions
+from pybeamtools.sim.models import RealisticModel, RealisticModelOptions
 from pybeamtools.sim.errors import DeviceDependencyError, DeviceError, ReadTimeoutError, \
     SimulationError, \
     WriteTimeoutError

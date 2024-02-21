@@ -6,7 +6,7 @@ from typing import Literal, Optional
 
 import numpy as np
 from pydantic import BaseModel, Extra, NonNegativeFloat, validator
-from ..utils.pydantic import JSON_ENCODERS
+from pybeamtools.utils.pydantic import JSON_ENCODERS
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +37,8 @@ class Device(metaclass=abc.ABCMeta):
 class VirtualDevice(Device):
     def __init__(self, name: str):
         super().__init__()
-        if ' ' in name:
-            raise ValueError(f'Whitespace is not allowed in device name')
+        if " " in name:
+            raise ValueError(f"Whitespace is not allowed in device name")
         self.name = name
 
     @abc.abstractmethod
@@ -215,12 +215,7 @@ class TRIGSPEC(Enum):
 
 
 class Oscillator(VirtualDevice):
-    def __init__(self,
-                 name: str,
-                 period: float,
-                 amplitude: float,
-                 now: float = 0.0
-                 ):
+    def __init__(self, name: str, period: float, amplitude: float, now: float = 0.0):
         self.time_last_update = self.t_start = now
         self.period = period
         self.amplitude = np.array([amplitude])
@@ -234,11 +229,12 @@ class Oscillator(VirtualDevice):
         return self.raw_value
 
     def write(self, value, t) -> bool:
-        raise NotImplementedError('Oscillator is a read-only device')
+        raise NotImplementedError("Oscillator is a read-only device")
 
     def update(self, t):
         self.raw_value = float(
-                self.amplitude * np.sin(2 * np.pi * (t - self.t_start) / self.period))
+            self.amplitude * np.sin(2 * np.pi * (t - self.t_start) / self.period)
+        )
         self.time_last_update = t
 
 
@@ -332,7 +328,7 @@ class TimeModel(VirtualDevice):
 #         return self.update_fn() if self.update_fn else None
 #
 #
-class StaticInputDevice():
+class StaticInputDevice:
     def __init__(self, name: str, value=0.0) -> None:
         self.value = self.setpoint = value
         self.name = name
@@ -388,7 +384,7 @@ class RealisticModelOptions(ModelOptions):
     high: float = None
     noise: NonNegativeFloat = None
     resolution: NonNegativeFloat = None
-    model: Literal['instant', 'exponential', 'underdamped'] = 'instant'
+    model: Literal["instant", "exponential", "underdamped"] = "instant"
     pmodel_kwargs: dict = {}
     # setpoint params
     setpoint_update_rate: float = None
@@ -397,18 +393,18 @@ class RealisticModelOptions(ModelOptions):
     readback_update_rate: float = None
     event_threshold: float = None
 
-    @validator('low', 'high')
+    @validator("low", "high")
     def check_limits(cls, v):
         low, high = v
         if high is not None and low is not None:
             assert high > low
 
-    @validator('pmodel_kwargs', always=True)
+    @validator("pmodel_kwargs", always=True)
     def check_model_opts(cls, kw, values):
-        if values['model'] == 'exponential':
-            kw.update({'decay_constant': 2})
-        elif values['model'] == 'underdamped':
-            kw.update({'decay_constant': 5, 'c': 0.9})
+        if values["model"] == "exponential":
+            kw.update({"decay_constant": 2})
+        elif values["model"] == "underdamped":
+            kw.update({"decay_constant": 5, "c": 0.9})
         return kw
 
 
@@ -438,7 +434,7 @@ class RealisticModel(TimeAwareModel):
 
     def check_t(self, t):
         if t < self.last_known_t:
-            raise ValueError(f'Time went backwards from {self.last_known_t} to {t}')
+            raise ValueError(f"Time went backwards from {self.last_known_t} to {t}")
 
     @property
     def time_last_call(self):
@@ -447,7 +443,7 @@ class RealisticModel(TimeAwareModel):
     @time_last_call.setter
     def time_last_call(self, t):
         if t < self.last_known_t:
-            raise ValueError(f'Time went backwards!')
+            raise ValueError(f"Time went backwards!")
         self._time_last_call = self.last_known_t = t
 
     def read(self, t: float) -> float:
@@ -470,12 +466,13 @@ class RealisticModel(TimeAwareModel):
 
     def write(self, setpoint: float, t: float):
         self.check_t(t)
-        assert self.time_last_update == t, f'Write time {t=} different from update ' \
-                                           f'{self.time_last_update=}'
+        assert self.time_last_update == t, (
+            f"Write time {t=} different from update " f"{self.time_last_update=}"
+        )
         if self.o.low and setpoint < self.o.low:
-            raise ValueError(f'Value {setpoint} below ({self.o.low}|{self.o.high})')
+            raise ValueError(f"Value {setpoint} below ({self.o.low}|{self.o.high})")
         if self.o.high and setpoint > self.o.high:
-            raise ValueError(f'Value {setpoint} above {self.o.low}|{self.o.high})')
+            raise ValueError(f"Value {setpoint} above {self.o.low}|{self.o.high})")
         self.last_setpoint = self.value
         self.setpoint = setpoint
         self.time_last_write = self.time_last_call = t
@@ -487,29 +484,31 @@ class RealisticModel(TimeAwareModel):
         self.time_last_update = self.time_last_call = t
 
     def _update_raw_value(self, t: float):
-        if self.o.model == 'exponential':
+        if self.o.model == "exponential":
             # For exp, N(t) = N0 exp(-lambda*T)
-            decay_constant = self.o.pmodel_kwargs['decay_constant']
+            decay_constant = self.o.pmodel_kwargs["decay_constant"]
             delta_t = t - self.time_last_update
             delta_v = self.raw_value - self.setpoint
             new_value = self.setpoint + delta_v * np.exp(-decay_constant * delta_t)
             self.raw_value = new_value
             # self.time_last_update = now
-        elif self.o.model == 'underdamped':
+        elif self.o.model == "underdamped":
             # N(t) = N0 exp(-w*c*T) exp(+- i*w*sqrt(1-c**2)*T)
             # = N0 exp(-w*c*T) cos(w*sqrt(1-c**2)*T)
-            dc = self.o.pmodel_kwargs['decay_constant']
-            c = self.o.pmodel_kwargs['c']
+            dc = self.o.pmodel_kwargs["decay_constant"]
+            c = self.o.pmodel_kwargs["c"]
 
             delta_t = t - self.time_last_update
             delta_t_abs = t - self.time_last_write
             delta_v = self.raw_value - self.setpoint
             delta_v_abs = self.last_setpoint - self.setpoint
-            factor = np.exp(-dc * c * delta_t_abs) * np.cos(dc * np.sqrt(1 - c * c) * delta_t_abs)
+            factor = np.exp(-dc * c * delta_t_abs) * np.cos(
+                dc * np.sqrt(1 - c * c) * delta_t_abs
+            )
             new_value = self.setpoint + delta_v_abs * factor
             self.raw_value = new_value
             # self.time_last_update = now
-        elif self.o.model == 'instant':
+        elif self.o.model == "instant":
             self.raw_value = self.setpoint
             # self.time_last_update = now
         else:
@@ -545,40 +544,51 @@ class RealisticModel(TimeAwareModel):
     #     return events
 
     def advance_direct_to_time(self, t: float) -> list:
-        """ Advance all the way to new time, only producing latest result if any """
+        """Advance all the way to new time, only producing latest result if any"""
         if self.o.readback_update_rate is None:
             return []
         tl = self.time_last_call
         self.update(t)
         if t - self.time_last_readback_event >= self.o.readback_update_rate:
-            logger.debug(f'Model {self.o.name}: ({tl}) -> ({t}) | {self.value:.5f} (TRIG, next in '
-                         f'{self.o.readback_update_rate:.5f})')
+            logger.debug(
+                f"Model {self.o.name}: ({tl}) -> ({t}) | {self.value:.5f} (TRIG, next in "
+                f"{self.o.readback_update_rate:.5f})"
+            )
             result = [(t, self.value)]
             self.time_last_readback_event = t
             return result
         else:
             until_update = t - self.time_last_readback_event
-            logger.debug(f'Model {self.o.name}: ({tl}) -> ({t}) | ({until_update:.5f}) until '
-                         f'next update, last at ({self.time_last_readback_event:.5f})')
+            logger.debug(
+                f"Model {self.o.name}: ({tl}) -> ({t}) | ({until_update:.5f}) until "
+                f"next update, last at ({self.time_last_readback_event:.5f})"
+            )
             return []
 
     def get_next_event(self, t: float) -> Optional[float]:
         events = self.advance_direct_to_time(t)
         if len(events) > 0:
             if len(events) > 1:
-                logger.warning(f'Multiple scan events detected - reduce step')
+                logger.warning(f"Multiple scan events detected - reduce step")
             return events[-1][1]
         else:
             return None
 
 
 class RealisticMagnet(VirtualDevice):
-    def __init__(self, name: str, value: float = 0.0, t: float = None,
-                 low=None, high=None,
-                 noise=None, resolution=None,
-                 measurement_period=None,
-                 model='instant', pmodel_kwargs=None
-                 ) -> None:
+    def __init__(
+        self,
+        name: str,
+        value: float = 0.0,
+        t: float = None,
+        low=None,
+        high=None,
+        noise=None,
+        resolution=None,
+        measurement_period=None,
+        model="instant",
+        pmodel_kwargs=None,
+    ) -> None:
         if high is not None and low is not None:
             assert high > low
         assert noise is None or noise >= 0.0
@@ -596,7 +606,7 @@ class RealisticMagnet(VirtualDevice):
         self.high = high
         self.model = model
         self.measurement_period = measurement_period
-        self.pmodel_kwargs = pmodel_kwargs or {'decay_constant': 2}
+        self.pmodel_kwargs = pmodel_kwargs or {"decay_constant": 2}
 
     def read(self, t: float = None) -> float:
         self.time_last_read = t or time.time()
@@ -623,10 +633,10 @@ class RealisticMagnet(VirtualDevice):
         self.time_last_write = t or time.time()
 
         if self.low and value < self.low:
-            raise ValueError(f'Value {value} below bounds ({self.low}|{self.high})')
+            raise ValueError(f"Value {value} below bounds ({self.low}|{self.high})")
             # return False
         if self.high and value > self.high:
-            raise ValueError(f'Value {value} above bounds ({self.low}|{self.high})')
+            raise ValueError(f"Value {value} above bounds ({self.low}|{self.high})")
             # return False
         self.setpoint = value
 
@@ -643,7 +653,7 @@ class RealisticMagnet(VirtualDevice):
         self.value = raw_read
 
     def _update_value(self, t: float):
-        if self.model == 'exponential':
+        if self.model == "exponential":
             # For exp, N(t) = N0 exp(-lambda*T)
             # decay_constant = self.pmodel_kwargs['decay_constant']
             # delta = t - self.time_last_update
@@ -651,13 +661,13 @@ class RealisticMagnet(VirtualDevice):
             # new_value = self.setpoint - output_delta * np.exp(-decay_constant * delta)
             # self.raw_value = new_value
 
-            decay_constant = self.pmodel_kwargs['decay_constant']
+            decay_constant = self.pmodel_kwargs["decay_constant"]
             delta_t = t - self.time_last_update
             delta_v = self.value - self.setpoint
             new_value = self.setpoint + delta_v * np.exp(-decay_constant * delta_t)
             self.raw_value = new_value
 
-        elif self.model == 'instant':
+        elif self.model == "instant":
             self.raw_value = self.setpoint
             # self.time_last_update = now
         else:

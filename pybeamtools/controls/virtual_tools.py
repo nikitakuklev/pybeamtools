@@ -8,7 +8,7 @@ from caproto import CaprotoRuntimeError, CaprotoTypeError, CaprotoValueError, Ch
 from caproto.server import PVGroup, SubGroup, pvproperty
 from caproto.server.server import T_PVGroup, T_SubGroup, PvpropertyData, PVSpec, NestedPvproperty
 
-from ..sim.devices import VirtualDevice
+from ..sim.models import VirtualDevice
 
 logger = logging.getLogger(__name__)
 
