@@ -782,10 +782,10 @@ class ModelPairDeviceOptions(DeviceOptions):
     device_type: Literal["model_pair_wrapper"] = "model_pair_wrapper"
     device: TimeAwareModel
     variable_name: str
-    readback_name: str
+    readback_name: Optional[str] = None
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
 
 
 class ModelPairDevice(EngineDevice):
@@ -815,7 +815,8 @@ class ModelPairDevice(EngineDevice):
         rb = self.options.device.read(ev.t_event)
         rb_exact = self.options.device.read_setpoint(ev.t_event)
         self.data[self.options.variable_name] = rb_exact
-        self.data[self.options.readback_name] = rb
+        if self.options.readback_name is not None:
+            self.data[self.options.readback_name] = rb
         return self.data
 
     def _read_fun(self, ev, channel_name):
@@ -828,7 +829,8 @@ class ModelPairDevice(EngineDevice):
         assert len(value_dict) == 1
         k = list(value_dict.keys())[0]
         value = list(value_dict.values())[0]
-        if k == self.options.readback_name:
+        rb = self.options.readback_name
+        if rb is not None and k == rb:
             raise DeviceWriteError("Readback cannot be written")
         else:
             assert k == self.options.variable_name
@@ -838,12 +840,13 @@ class ModelPairDevice(EngineDevice):
             self.data[self.options.variable_name] = self.options.device.read_setpoint(
                 ev.t_event
             )
-            self.data[self.options.readback_name] = self.options.device.read(ev.t_event)
+            if rb is not None:
+                self.data[rb] = self.options.device.read(ev.t_event)
             return self.data
 
     def _scan_fun(self, ev):
         scan_rb = self.options.device.get_next_event(ev.t_event)
-        if scan_rb is not None:
+        if scan_rb is not None and self.options.readback_name is not None:
             self.data[self.options.readback_name] = scan_rb
             return {self.options.readback_name: scan_rb}
         else:

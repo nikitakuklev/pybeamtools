@@ -29,7 +29,7 @@ class MockSetupPairDevice:
         variables: list[str] = None,
         objectives: list[str] = None,
         constraints: list[str] = None,
-        readbacks: list[str] = None,
+        readbacks: dict[str, str] = None,
         constants: list[str] = None,
         extra_vars: list[str] = None,
         variables_initial_values: dict[str, float] = None,
@@ -140,7 +140,7 @@ class MockSetupPairDevice:
                 ModelPairDeviceOptions(
                     name=f"DEV:{el}",
                     variable_name=self.variables[i],
-                    readback_name=self.readbacks[i],
+                    readback_name=self.readbacks.get(self.variables[i], None),
                     device=magmodel,
                     scan_period=self.scan_period_rb,
                 )
