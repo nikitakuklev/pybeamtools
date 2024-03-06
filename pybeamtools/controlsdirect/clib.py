@@ -29,7 +29,7 @@ class Accelerator:
             self.acc = acc
             pass
 
-        def __getitem__(self, name: str):
+        def __getitem__(self, name: str) -> 'PV':
             return self.get(name)
 
         def get(self, name: str, monitor: bool = True):

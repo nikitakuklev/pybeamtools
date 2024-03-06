@@ -6,23 +6,12 @@ import time
 import numpy as np
 import pytest
 
-from pybeamtools.controls import EPICSPV
-from pybeamtools.controls import ConnectionOptions, PVAccess, \
-    PVOptions
-from pybeamtools.controls.errors import InterlockWriteError, SecurityError
-from pybeamtools.controls.interlocks import LimitInterlock, LimitInterlockOptions
-from pybeamtools.sim.core import SignalEngineOptions, SignalEngine
-from pybeamtools.sim.softioc import EchoIOC, SimpleIOC
-from pybeamtools.sim.templates import MockSetupPairDevice
-import pybeamtools.controls as pc
-import pytest
 from pybeamtools.controls import Accelerator, AcceleratorOptions, ConnectionOptions, PVAccess, \
     PVOptions
 from pybeamtools.controls.errors import SecurityError
-from pybeamtools.sim.core import SignalEngineOptions, SignalEngine
-from pybeamtools.sim.errors import DeviceWriteError
-from pybeamtools.sim.pddevices import DS, EPICSDevice, EPICSDeviceOptions, EchoDevice, \
-    EchoDeviceOptions, ProxyDevice, ProxyDeviceOptions, TRIG
+from pybeamtools.sim.core import SignalEngine, SignalEngineOptions
+from pybeamtools.sim.pddevices import EPICSDevice, EPICSDeviceOptions
+from pybeamtools.sim.softioc import EchoIOC, EchoIOCV2
 from pybeamtools.sim.templates import MockSetupPairDevice
 
 logger = logging.getLogger(__name__)
@@ -49,6 +38,38 @@ os.environ['EPICS_CA_AUTO_ADDR_LIST'] = 'no'
 os.environ['EPICS_CA_ADDR_LIST'] = '127.0.0.1'
 
 
+@pytest.fixture
+def f_sim_rt_noscan():
+    sim = SignalEngine(SignalEngineOptions(time_function=time.time,
+                                           update_thread_name='simaccupd'))
+    sim.TRACE = True
+    sim.TIME_TRACE = True
+    sim.txid = 50000
+    pmodel_kwargs = dict(readback_update_rate=1.0,
+                         model='exponential',
+                         pmodel_kwargs={'decay_constant': 0.5},
+                         )
+    mg = MockSetupPairDevice(variables=variables_pv,
+                             objectives=objectives_pv,
+                             readbacks=readbacks_pv,
+                             noise=0.01,
+                             variable_pmodel_kwargs=pmodel_kwargs,
+                             scan_period_rb=0.0,
+                             realtime=True)
+    mg.create(sim)
+    return sim
+
+def run_repeater():
+    from caproto.sync import repeater
+    repeater.run(host='127.0.0.1')
+    # time.sleep(1.0)
+
+def run_repeater_process():
+    p = multiprocessing.Process(target=run_repeater)
+    p.daemon = True
+    p.start()
+    logger.info(f'Repeater started {p=}')
+
 class TestEPICSPV:
     # variables = ['X0PV', 'X1PV', 'X2PV']
     # readbacks = ['X0_RBPV', 'X1_RBPV', 'X2_RBPV']
@@ -59,16 +80,7 @@ class TestEPICSPV:
         os.environ['EPICS_CA_AUTO_ADDR_LIST'] = 'no'
         os.environ['EPICS_CA_ADDR_LIST'] = '127.0.0.1'
 
-    def run_repeater(self):
-        from caproto.sync import repeater
-        repeater.run(host='127.0.0.1')
-        # time.sleep(1.0)
 
-    def run_repeater_process(self):
-        p = multiprocessing.Process(target=self.run_repeater)
-        p.daemon = True
-        p.start()
-        logger.info(f'Repeater started {p=}')
 
     # @pytest.fixture
     # def soft_ioc(self, sim_engine):
@@ -182,26 +194,6 @@ class TestEPICSPV:
     #     acc.add_pv_object([pv, pv2, pv3, pv4])
     #     return sim_engine, acc, pv, pv2, pv3, pv4
 
-    @pytest.fixture
-    def f_sim_rt_noscan(self):
-        sim = SignalEngine(SignalEngineOptions(time_function=time.time,
-                                               update_thread_name='simaccupd'))
-        sim.TRACE = True
-        sim.TIME_TRACE = True
-        sim.txid = 50000
-        pmodel_kwargs = dict(readback_update_rate=1.0,
-                            model='exponential',
-                            pmodel_kwargs={'decay_constant': 0.5},
-                            )
-        mg = MockSetupPairDevice(variables=variables_pv,
-                                 objectives=objectives_pv,
-                                 readbacks=readbacks_pv,
-                                 noise=0.01,
-                                 variable_pmodel_kwargs=pmodel_kwargs,
-                                 scan_period_rb=0.0,
-                                 realtime=True)
-        mg.create(sim)
-        return sim
 
     @pytest.fixture
     def f_acc_and_sim_with_pvs(self) -> tuple[Accelerator, SignalEngine]:
@@ -242,7 +234,7 @@ class TestEPICSPV:
     def f_soft_ioc(self, f_sim_rt_noscan):
         sim = f_sim_rt_noscan
 
-        self.run_repeater_process()
+        run_repeater_process()
         time.sleep(3.0)
 
         channels = variables_pv + readbacks_pv + objectives_pv
@@ -457,3 +449,48 @@ class TestEPICSPV:
     #     assert soft_ioc.pvdb['TEST:CHANNEL:B'].value == 1.4
     #
     #     acc.pm.stop_interlock(ilock)
+
+
+def test_softioc_v3(f_sim_rt_noscan):
+    run_repeater_process()
+    time.sleep(3.0)
+
+    sim = f_sim_rt_noscan
+    sim.write_channel('X0PV', 5.0)
+
+    channels = variables_pv + readbacks_pv + objectives_pv
+    sioc = EchoIOCV2(channels=channels, se=sim)
+    logger.warning(sioc.pvdb)
+    sioc.run_in_background()
+    logger.debug(f'Soft IOC started')
+    for ch in readbacks_pv + objectives_pv:
+        def callback(sub, response):
+            name = sub.name
+            logger.debug(f'Soft IOC put callback for PV ({sub.name}): ({response})')
+            # logger.debug(f'{type(name)=} {type(response[0])=}')
+            # logger.debug(f'{sioc=} {sioc.__dict__=}')
+            # sioc.bl.pvdb[name].write(response[0], verify_value=False)
+            # sioc.ping()
+            sioc.send_updates(name, response)
+
+        cb = callback
+        subscription = sim.subscribe_channel(ch)
+        subscription.add_callback(cb)
+
+    time.sleep(2.0)
+
+    #sioc.send_updates('X0PV', 5.0)
+    import pybeamtools.controlsdirect.clib
+    acc = pybeamtools.controlsdirect.clib.Accelerator()
+
+    pv = acc.kv['X0PV']
+    pv.wait_for_connection()
+
+    logger.warning(f'Reading {pv.name}')
+    result = pv.read(timeout=99999.9)
+    assert result.data == 5.0
+    #sim.write_channel('X0PV', 5.0)
+
+
+    sioc.stop()
+    sioc.join()

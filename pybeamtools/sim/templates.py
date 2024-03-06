@@ -50,7 +50,8 @@ class MockSetupPairDevice:
             raise ValueError(f"Bad initial values {self.variables_initial_values}")
         self.readbacks = readbacks
         self.objectives = objectives
-        self.constraints = constraints if constraints is not None else []
+        constraints = constraints if constraints is not None else []
+        self.constraints = constraints
         self.constants = constants if constants is not None else []
         self.extra_vars = extra_vars if extra_vars is not None else []
         self.models_dict: dict[str, Any] = {}

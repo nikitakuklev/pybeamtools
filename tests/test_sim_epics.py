@@ -7,7 +7,7 @@ import pytest
 from pybeamtools.controls.errors import SecurityError
 from pybeamtools.controls import Accelerator, AcceleratorOptions, ConnectionOptions, PVAccess, \
     PVOptions
-from pybeamtools.sim.softioc import SimpleIOC
+from pybeamtools.sim.softioc import SimpleTuningIOC
 from pybeamtools.sim.core import SignalEngineOptions, SignalEngine
 from pybeamtools.sim.pddevices import DS, EPICSDevice, EPICSDeviceOptions, EchoDevice, \
     EchoDeviceOptions, \
@@ -150,7 +150,7 @@ def simple_soft_ioc():
     repeater.spawn_repeater()
     time.sleep(0.5)
 
-    sioc = SimpleIOC(variables, objectives, test_variables, noise=0.05)
+    sioc = SimpleTuningIOC(variables, objectives, test_variables, noise=0.05)
     sioc.setup()
     sioc.run_in_background()
     logger.debug(f'Soft IOC started')

@@ -2,6 +2,7 @@ import asyncio
 import functools
 import logging
 import multiprocessing
+import time
 from asyncio import AbstractEventLoop
 from threading import Thread
 from typing import Any, Optional
@@ -9,8 +10,9 @@ from typing import Any, Optional
 import caproto
 import nest_asyncio
 import numpy as np
-from caproto import SkipWrite
-from caproto.asyncio.server import run
+from caproto import ChannelNumeric, ChannelType, SkipWrite
+from caproto._data import _read_only_property
+from caproto.asyncio.server import Context, run
 from caproto.server import SubGroup, pvproperty, PvpropertyDouble, PVSpec
 from caproto.server.typing import AsyncLibraryLayer, T_contra
 
@@ -39,6 +41,10 @@ class SimController:
 class SoftIOC:
     def __init__(self):
         self.pvdb = None
+        self.stop_requested = False
+        self.thread_started = False
+        self.t = None
+        self.thread_data = None
 
     def ping(self):
         logger.info("Pong")
@@ -54,18 +60,61 @@ class SoftIOC:
         run(self.pvdb, log_pv_names=True, interfaces=["127.0.0.1"])
 
     def run_in_background(self, daemon=True):
+        async def startup_hook(async_lib):
+            logger.info("SoftIOC: starting startup hook for stop monitoring")
+            while True:
+                if self.stop_requested:
+                    logger.info("SoftIOC: hook detected stop request, exiting")
+                    raise asyncio.CancelledError
+                await async_lib.library.sleep(0.1)
+
         def start_background_loop(loop: asyncio.AbstractEventLoop) -> None:
+            self.thread_started = True
             self.loop = loop = asyncio.new_event_loop()
             loop.set_debug(True)
             asyncio.set_event_loop(loop)
-            logger.info(f"Starting loop {loop=}")
-            run(self.pvdb, log_pv_names=True, interfaces=["127.0.0.1"])
+            logger.info(f"Starting soft ioc in loop [{loop}]")
+
+            async def start_server(pvdb, *, interfaces=None, log_pv_names=False,
+                                   startup_hook=None
+                                   ):
+                '''Start an asyncio server with a given PV database'''
+                ctx = Context(pvdb, interfaces)
+                self.thread_data = ctx
+                return await ctx.run(log_pv_names=log_pv_names, startup_hook=startup_hook)
+
+            asyncio.run(
+                start_server(
+                        self.pvdb,
+                        interfaces=["127.0.0.1"],
+                        log_pv_names=True,
+                        startup_hook=startup_hook,
+                )
+            )
+            logger.info(f"Server run method exited")
+            self.thread_started = self.stop_requested = False
 
         t = Thread(daemon=daemon, target=start_background_loop, args=(None,))
-        logger.info(f"Starting thread {t=}")
+        logger.info(f"Starting SoftIOC in thread [{t}]")
+        self.t = t
         t.start()
         return t
 
+    def stop(self):
+        logger.info(f"SoftIOC: stop requested")
+        self.stop_requested = True
+        for i in range(100):
+            if not self.thread_started:
+                logger.info(f"SoftIOC: thread stop OK")
+                return
+            time.sleep(0.01)
+        raise Exception(f"SoftIOC: thread stop failed")
+
+    def join(self):
+        if self.t is not None:
+            self.t.join()
+        else:
+            raise Exception("No thread to join")
     def process_task(self, loop: asyncio.AbstractEventLoop) -> None:
         loop = asyncio.new_event_loop()
         loop.set_debug(True)
@@ -81,7 +130,7 @@ class SoftIOC:
         logger.info(f"Started process {process=}")
 
 
-class SimpleIOC:
+class SimpleTuningIOC:
     def __init__(
         self,
         variables: list[str],
@@ -626,17 +675,107 @@ class EchoIOC(SoftIOC):
 class EchoIOCV2(SoftIOC):
     """Soft IOC that mirror SE values"""
 
-    def __init__(self, channels: list[str], sim_engine: SignalEngine):
+    def __init__(self, channels: list[str], se: SignalEngine):
         super().__init__()
-        self.se = sim_engine
-        self.channels = channels
+        logger.info(f"Setting up echo IOC with channels {channels}")
+        self.se = se
+        self.channels = []
         self.pvspecs: list[PVSpec] = []
         self.queues = {}
-        for ch in channels:
-            assert ch in self.se.channels
+        self.getter = self.putter = self.push_updater = None
+        self.pvdb = {}
+        self.getter, self.putter, self.push_updater = self.get_funcs()
 
-    def setup(self):
-        logger.info(f"Setting up echo IOC with channels {self.channels}")
+        for i, channel in enumerate(channels):
+            self.add_channel(channel)
+
+    def get_funcs(self):
+        async def ai_getter(instance, *args, channel):
+            value = self.se.read_channel(channel)
+            logger.info(
+                f"ai_getter {instance.pvname=}: {value=} {channel=} {instance=}"
+            )
+            # Does not work since does not update data without triggering subs
+            # instance.write(value, verify_value=False)
+            # Trick caproto to directly modify ChannelData, it will be returned by _read
+            instance._data["value"] = value
+            # Return none to avoid putter call
+            return None
+
+        async def ai_putter(instance, value, *args, channel):
+            logger.info(
+                f"ai_writer {instance.pvname=}: {value=} {channel=} {instance=}"
+            )
+            try:
+                self.se.write_channel(channel, value)
+                # skip official write since callback will do it
+                # return SkipWrite
+            except Exception as ex:
+                logger.error(f"Error writing {channel=} {ex} (rejecting)")
+                raise SkipWrite
+                # raise
+            return None
+
+        async def async_updater(instance: PvpropertyDouble,
+                                async_lib: AsyncLibraryLayer,
+                                *args,
+                                channel: str, q):
+            logger.info(f"SoftIOC updater for {channel=} starting")
+            try:
+                async_q = AsyncioQueue(asyncio.get_running_loop())
+                q.queues[channel] = async_q
+                while True:
+                    # async_q = AsyncioQueue(asyncio.get_running_loop())
+                    # q.queues[channel] = async_q
+                    # logger.info(f'SoftIOC updater for {channel=} starting 2')
+                    data = await async_q.async_get()
+                    logger.debug(f"SoftIOC updater for {channel=} received {data=}")
+                    await instance.write(data, verify_value=False)
+            except Exception as ex:
+                logger.error(f"SoftIOC {channel=} exception {ex}")
+            finally:
+                logger.warning(f"Updater for {channel=} is exiting")
+
+        return ai_getter, ai_putter, async_updater
+
+    def send_updates(self, channel: str, data: float):
+        assert isinstance(data, float)
+        # assert len(data) > 0
+        assert channel in self.channels
+        logger.info(f"EchoIOC sending {data=} to {channel=}")
+        q = self.queues[channel]
+        q.put(data)
+
+    def set_failure_status(self, channel, status):
+        assert channel in self.channels
+        assert isinstance(status, bool)
+        logger.info(f"Channel {channel} set failure to {status}")
+        q = self.queues[channel]
+        q.put({"op": "status", "data": status})
+
+    def add_channel(self, channel: str):
+        assert channel in self.se.channels
+        if channel in self.pvdb:
+            raise ValueError(f"Channel {channel} already exists")
+
+        value = self.se.read_channel(channel)
+        assert isinstance(
+                value, float
+        ), f"Invalid value {value} for {channel}"
+
+        prop = pvproperty(
+                record="ai",
+                doc=f"echo_{channel}",
+                name=channel,
+                value=value,
+                dtype=PvpropertyDouble,
+                get=functools.partial(self.getter, channel=channel),
+                put=functools.partial(self.putter, channel=channel),
+                startup=functools.partial(self.push_updater, channel=channel, q=self),
+        )
+        self.pvdb[prop.pvspec.name] = prop.pvspec.create(group=None)
+        self.channels.append(channel)
+        logger.debug(f"Added channel {channel} to EchoIOC")
 
         # async def var_put_handler(instance: T_contra, value: Any, *args):
         #     logger.debug(f'ai_writer {instance=} {value=}')
@@ -690,84 +829,28 @@ class EchoIOCV2(SoftIOC):
         #     finally:
         #         logger.warning(f'{instance.name=} is exiting')
 
-        async def ai_getter(instance, *args, channel):
-            value = self.se.read_channel(channel)
-            logger.info(
-                f"ai_getter {instance.pvname=}: {value=} {channel=} {instance=}"
-            )
-            # Does not work since does not update data without triggering subs
-            # instance.write(value, verify_value=False)
-            # Trick caproto to directly modify ChannelData, it will be returned by _read
-            instance._data["value"] = value
-            # Return none to avoid putter call
-            return None
+def DynamicPVDB():
+    def __init__(self):
+        self.handlers = {}
 
-        async def ai_putter(instance, value, *args, channel):
-            logger.info(
-                f"ai_writer {instance.pvname=}: {value=} {channel=} {instance=}"
-            )
-            try:
-                self.se.write_channel(channel, value)
-                # skip official write since callback will do it
-                # return SkipWrite
-            except Exception:
-                # TODO: add more logging
-                raise SkipWrite
-                # raise
-            return None
+    def __getitem__(self, key):
+        return self.handlers[key]
 
-        async def async_updater(instance, async_lib, *args, channel, q):
-            logger.info(f"SoftIOC updater for {channel=} starting")
-            try:
-                async_q = AsyncioQueue(asyncio.get_running_loop())
-                q.queues[channel] = async_q
-                while True:
-                    # async_q = AsyncioQueue(asyncio.get_running_loop())
-                    # q.queues[channel] = async_q
-                    # logger.info(f'SoftIOC updater for {channel=} starting 2')
-                    data = await async_q.async_get()
-                    logger.debug(f"SoftIOC updater for {channel=} received {data=}")
-                    await instance.write(data, verify_value=False)
-            except Exception as ex:
-                logger.error(f"SoftIOC {channel=} exception {ex}")
-            finally:
-                logger.warning(f"Updater for {channel=} is exiting")
+    def __setitem__(self, key, value):
+        self.handlers[key] = value
 
-        props = []
-        for i, channel in enumerate(self.channels):
-            value = self.se.read_channel(channel)
-            assert isinstance(
-                value, float
-            ), f"Invalid value {value} for channel {channel}"
-            props.append(
-                pvproperty(
-                    record="ai",
-                    doc=f"echo_{i}",
-                    name=channel,
-                    value=value,
-                    dtype=PvpropertyDouble,
-                    get=functools.partial(ai_getter, channel=channel),
-                    put=functools.partial(ai_putter, channel=channel),
-                    startup=functools.partial(async_updater, channel=channel, q=self),
-                )
-            )
 
-        pvdb = {
-            pvspec.pvspec.name: pvspec.pvspec.create(group=None) for pvspec in props
-        }
-        self.pvdb = pvdb
+class ChannelCustomDouble(ChannelNumeric):
+    data_type = ChannelType.DOUBLE
 
-    def send_updates(self, channel: str, data: float):
-        assert isinstance(data, float)
-        # assert len(data) > 0
-        assert channel in self.channels
-        logger.info(f"EchoIOC sending {data=} to {channel=}")
-        q = self.queues[channel]
-        q.put(data)
+    def __init__(self, *, precision=0, **kwargs):
+        super().__init__(**kwargs)
 
-    def set_failure_status(self, channel, status):
-        assert channel in self.channels
-        assert isinstance(status, bool)
-        logger.info(f"Channel {channel} set failure to {status}")
-        q = self.queues[channel]
-        q.put({"op": "status", "data": status})
+        self._data['precision'] = precision
+
+    precision = _read_only_property('precision')
+
+    def __getnewargs_ex__(self):
+        args, kwargs = super().__getnewargs_ex__()
+        kwargs['precision'] = self.precision
+        return (args, kwargs)
