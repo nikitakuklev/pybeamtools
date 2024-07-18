@@ -3,3 +3,4 @@ pandas
 pydantic
 ipywidgets
 tqdm
+pytest
