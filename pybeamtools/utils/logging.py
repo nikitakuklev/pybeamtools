@@ -2,13 +2,13 @@ import json
 import logging
 import multiprocessing
 import os
+import sys
 import threading
 import logging.handlers
 import queue
 
 
 # logger = logging.getLogger(__name__)
-
 
 class LogManager:
     queue = multiprocessing.Queue(10000)
@@ -18,34 +18,53 @@ class LoggingState:
     started = False
 
 
-def config_root_logging(level=logging.DEBUG):
+def config_root_logging(level=logging.DEBUG, reset_handlers=False, suppress_low_priority=True):
+    logger = logging.getLogger(__name__)
+    # logger.info('Logging setup finished')
+    if suppress_low_priority:
+        suppress_low_priority_modules()
+    if reset_handlers:
+        root = logging.getLogger()
+        for handler in root.handlers:
+            root.removeHandler(handler)
+        logging.basicConfig(level=level,
+                            # format='%(asctime)s %(processName)-10s %(name)s %(levelname)-8s %(message)s', #[%(name)s]
+                            format='[%(levelname)-5.5s][%(threadName)10.10s][%(asctime)s.%(msecs)03d '
+                                   '%(filename)10s %(lineno)4s] %(message)s',
+                            datefmt='%H:%M:%S',
+                            # force=True
+                            )
+        #root = logging.getLogger()
+        # print(root.handlers)
+
+
+def suppress_low_priority_modules():
+    logging.getLogger('pysdds.readers.readers').setLevel(logging.INFO)
+    logging.getLogger('pysdds.writers.writers').setLevel(logging.INFO)
+    logging.getLogger('caproto.bcast').setLevel(logging.WARNING)
+    logging.getLogger('caproto').setLevel(logging.WARNING)
+    logging.getLogger('matplotlib').setLevel(logging.WARNING)
+    logging.getLogger('caproto.server.records.utils').setLevel(logging.WARNING)
+
+
+def setup_faulthandler():
+    import faulthandler
+    faulthandler.enable(file=sys.stderr)
+
+
+def start_logging_thread():
     if LoggingState.started:
         logger = logging.getLogger(__name__)
-        logger.info('Skipping logger init since already done')
+        logger.info('Logging thread is already running')
         return False
 
-    #root = logging.getLogger()
-    #print(root.handlers)
-    # for handler in root.handlers:
-    #     root.removeHandler(handler)
-    #print(root.handlers)
-    # logging.basicConfig(level=level,
-    #                     # format='%(asctime)s %(processName)-10s %(name)s %(levelname)-8s %(message)s', #[%(name)s]
-    #                     format='[%(levelname)-5.5s][%(threadName)10.10s][%(asctime)s.%(msecs)03d '
-    #                            '%(filename)10s %(lineno)4s] %(message)s',
-    #                     datefmt='%H:%M:%S',
-    #                     #force=True
-    #                     )
-    # print('hi2')
-    #root = logging.getLogger()
-    #print(root.handlers)
     logger = logging.getLogger(__name__)
     logger.info(f'Starting shared logging thread on PID {os.getpid()}')
     receive_thread = threading.Thread(target=_listener, name='log_listener',
                                       args=(LogManager.queue,))
     receive_thread.daemon = True
     receive_thread.start()
-    logger.info('Logging setup finished')
+    logger.info('Logging thread started')
     LoggingState.started = True
     return True
 
