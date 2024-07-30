@@ -1,7 +1,4 @@
 import logging
-import os
-import socket
-import threading
 import time
 
 logging.getLogger('numba').setLevel(logging.WARNING)
@@ -9,7 +6,7 @@ logging.getLogger('caproto').setLevel(logging.WARNING)
 
 from pybeamtools.aps.daq.processor import FakeRayLifetimeProcessor
 
-LTP_CONFIG = {'Lifetime500': (2, 5), 'Lifetime1s': (10, 20), 'Lifetime2s': (20, 40)}
+LTP_CONFIG = {'Lifetime1s': (5, 10), 'Lifetime2s': (10, 20)}
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +19,9 @@ if __name__ == '__main__':
 
     ltp = FakeRayLifetimeProcessor(sectors=[1],
                                    lifetime_processors=LTP_CONFIG,
-                                   debug=True)
+                                   #polling_period=0.5,
+                                   debug=True,
+                                   streamer_kwargs={'event_period':0.45})
     ltp.setup_streamers()
     ltp.start_streamers()
     ltp.start_aggregator_thread()
