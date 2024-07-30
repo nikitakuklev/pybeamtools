@@ -30,6 +30,7 @@ def is_bpm_field(x):
 
 WINDOW = 2048 // 2
 STEP = 1024 // 2
+DAQ_DOWNSAMPLE_FACTOR = 32
 TRACE = False
 
 
@@ -135,6 +136,7 @@ def post_process_daq_object_via_paths(data: dict,
                                       tag_field='acqClkTimestamp',
                                       frame_len: int = None,
                                       debug=False,
+                                      # tag_function: Optional[Callable] = None,
                                       ) -> tuple[list[np.ndarray], np.ndarray, list[str], tuple[int, int]]:
     """ Process the data dictionary from the PV using the field paths to traverse the structure. """
     arrays = {field: [] for field in field_paths}
@@ -154,22 +156,26 @@ def post_process_daq_object_via_paths(data: dict,
                 arr = arr.get(p, None)
                 if arr is None:
                     raise Exception(f'Bad path {fp=} - no data')
-            if frame_len is not None and len(arr) != frame_len:
-                logger.error(f'Bad length {len(arr)}')
-                if not ignore_errors:
-                    raise Exception(f'Bad length {len(arr)}, expected {frame_len}')
-            if len(arr) > 0:
+            larr = len(arr)
+            if frame_len is not None and larr != frame_len:
+                if larr == 0:
+                    pass
+                else:
+                    logger.error(f'Bad length {larr=} vs {frame_len=}')
+                    if not ignore_errors:
+                        raise Exception(f'Bad length {larr}, expected {frame_len}')
+            if larr > 0:
                 if TRACE:
                     logger.debug(f'Found path {fp=}')
                 arrays[field].append(arr)
                 channels.append(fp[0])
             else:
                 if not ignore_errors:
-                    logger.error(f'Bad channel {fp[0]=}')
+                    raise ValueError(f'Bad channel {fp[0]=}')
 
     time_array = data[time_field].copy()
     time_tag = data[tag_field]
-    tag = (time_tag['secondsPastEpoch'], (time_tag['nanoseconds'] // 100000000)*100)
+    tag = (time_tag['secondsPastEpoch'], (time_tag['nanoseconds'] // 100000000) * 100)
 
     final_matrices = []
     for field in field_paths:
@@ -209,26 +215,38 @@ def post_process_daq_object_via_paths(data: dict,
 #     # fix
 #     return out, tarr[::step]
 
-def get_numba_rolling_mean_2d(frame_len):
+# def get_numba_rolling_mean_2d(frame_len, window, step):
+#     @numba.jit(['int32[:,:](int32[::1,:])', 'float32[:,:](float32[::1,:])', 'float64[:,:](float64[::1,:])'],
+#                nopython=True, nogil=True, fastmath=True)  # parallel=True,
+#     def numpy_rolling_mean_2d(mat):
+#         N = (frame_len - WINDOW) // STEP + 1
+#         out = np.zeros((N, mat.shape[1]), dtype=mat.dtype)
+#         for i in range(N):
+#             out[i] = np.sum(mat[i * STEP:i * STEP + WINDOW, :], axis=0) / WINDOW
+#         return out
+#
+#     return numpy_rolling_mean_2d
+
+def get_numba_rolling_mean_2d(frame_len, window, step):
     @numba.jit(['int32[:,:](int32[::1,:])', 'float32[:,:](float32[::1,:])', 'float64[:,:](float64[::1,:])'],
                nopython=True, nogil=True, fastmath=True)  # parallel=True,
     def numpy_rolling_mean_2d(mat):
-        N = (frame_len - WINDOW) // STEP + 1
+        N = (frame_len - window) // step + 1
         out = np.zeros((N, mat.shape[1]), dtype=mat.dtype)
         for i in range(N):
-            out[i] = np.sum(mat[i * STEP:i * STEP + WINDOW, :], axis=0) / WINDOW
+            out[i] = np.sum(mat[i * step:i * step + window, :], axis=0) / window
         return out
 
     return numpy_rolling_mean_2d
 
 
-def get_numba_rolling_mean_1d(frame_len):
+def get_numba_rolling_mean_1d(frame_len, window, step):
     @numba.jit('float64[:](float64[::1])', nopython=True, nogil=True, fastmath=True)
     def numpy_rolling_mean_1d(mat):
-        N = (frame_len - WINDOW) // STEP + 1
+        N = (frame_len - window) // step + 1
         out = np.zeros(N, dtype=mat.dtype)
         for i in range(N):
-            out[i] = np.sum(mat[i * STEP:i * STEP + WINDOW], axis=0) / WINDOW
+            out[i] = np.sum(mat[i * step:i * step + window], axis=0) / window
         return out
 
     return numpy_rolling_mean_1d
@@ -286,6 +304,7 @@ class DAQStreamer(ABC):
         self.fields_paths: dict[str, list[str]] = {}
         self.keys = None
         self.cbs: dict[str, Callable] = {}
+        self.cbs_kwargs: dict[str, dict] = {}
         self.monitor_limit = None
         self.monitor_thread = None
         self.time_start: Optional[float] = None
@@ -320,7 +339,6 @@ class DAQStreamer(ABC):
     def __str__(self):
         return f'{self.__class__.__name__} {self.channel_name}: {self.is_monitoring=}, {self.is_connected=}'
 
-
     def exec_fun(self, f):
         return f(self)
 
@@ -331,6 +349,13 @@ class DAQStreamer(ABC):
                 print(msg)
             else:
                 self.logger.debug(msg)
+
+    def lerror(self, msg):
+        if self.log_with_print:
+            # Useful with ray
+            print(msg)
+        else:
+            self.logger.error(msg, stacklevel=2)
 
     def connect(self):
         self.channel = self.acc.kvpva(self.channel_name)
@@ -346,7 +371,7 @@ class DAQStreamer(ABC):
             time.sleep(0.01)
 
         if not self.is_connected:
-            raise Exception(f'Connection failed - pvapy reports {self.channel.isConnected()=}')
+            raise Exception(f'Connection to {self.channel_name} failed - pvapy reports {self.channel.isConnected()=}')
 
         fstr, fields_paths = self.get_channel_settings(self.channel)
         self.fields_paths = fields_paths
@@ -389,80 +414,87 @@ class DAQStreamer(ABC):
             self.event_cb_result = {'success': True, 'cbs': cb_results}
             self.event_cb_result_buffer.append(self.event_cb_result)
         except Exception as e:
-            self.logger.error(f'Error in event processing: {e} {traceback.format_exc()}')
+            self.lerror(f'Error in event processing: {e} {traceback.format_exc()}')
             self.event_cb_result = {'success': False, 'cbs': {}}
             self.event_cb_result_buffer.append(self.event_cb_result)
+
+    # gets pvaccess.pvaccess.PvObject
+    def __cbinternal(self, x):
+        if 'acqClkTimestamp' not in x:
+            raise Exception(f'No acqClkTimestamp in monitor for {self.channel_name} - have {x.keys()=}')
+        time_tuple = x['acqClkTimestamp']['secondsPastEpoch'], x['acqClkTimestamp']['nanoseconds']
+        self.ldebug(f'ST [{self.name}] | monitor tag [{time_tuple}] callback with {x.keys()=}')
+        try:
+            self.callback_received = True
+            t1 = time.time()
+            if self.store_last_event:
+                self.event_last = x.copy()
+            with self.event_callback_lock:
+                self.process_monitor_event(x)
+            t2 = time.time()
+            delta = t2 - t1
+            # if delta > 0.08:
+            #     print(f'Callback time {delta:.3f} IS TOO DAMN LONG')
+            self.event_cb_time += delta
+            self.event_cnt += 1
+            self.event_cb_last_timestamp = t1
+            self.event_cb_time_history.append(delta)
+            self.event_cb_timestamps.append(t1)
+            self.event_cb_avg_time = self.event_cb_time / self.event_cnt
+            if delta > self.event_cb_max_time:
+                self.event_cb_max_time = delta
+            if delta > self.event_fault_threshold:
+                self.event_cb_fault_cnt += 1
+            self.avg_load = self.event_cb_time / (t2 - self.time_start)
+
+            self.ldebug(f'ST {self.channel_name} | monitor {self.event_cb_result["tag"]} handled in'
+                        f' {delta:.3f} at local times {t1} -> {t2}')
+
+            if self.stop_requested:
+                self.channel.stopMonitor()
+                self.stop_requested = False
+                self.is_monitoring = False
+        except Exception as e:
+            self.lerror(f'Error in monitor callback: {e} {traceback.format_exc()}')
+        finally:
+            if self.monitor_limit is not None:
+                self.monitor_limit -= 1
+                if self.monitor_limit <= 0:
+                    self.logger.info(f'ST [{self.name}] | Monitor limit reached, stopping')
+                    self.channel.stopMonitor()
+                    self.is_monitoring = False
 
     def start_monitor(self, limit=None):
         self.monitor_limit = limit
         if not self.is_connected:
             raise Exception('Not connected')
-
         if self.is_monitoring:
             raise Exception('Already running')
 
-        # gets pvaccess.pvaccess.PvObject
-        def __cbinternal(x):
-            self.ldebug(f'ST {self.channel_name} | event callback got frame with {len(x.keys())=}')
-            try:
-                self.callback_received = True
-                t1 = time.time()
-                if self.store_last_event:
-                    self.event_last = x.copy()
-                with self.event_callback_lock:
-                    self.process_monitor_event(x)
-                t2 = time.time()
-                delta = t2 - t1
-                # if delta > 0.08:
-                #     print(f'Callback time {delta:.3f} IS TOO DAMN LONG')
-                self.event_cb_time += delta
-                self.event_cnt += 1
-                self.event_cb_last_timestamp = t1
-                self.event_cb_time_history.append(delta)
-                self.event_cb_timestamps.append(t1)
-                self.event_cb_avg_time = self.event_cb_time / self.event_cnt
-                if delta > self.event_cb_max_time:
-                    self.event_cb_max_time = delta
-                if delta > self.event_fault_threshold:
-                    self.event_cb_fault_cnt += 1
-                self.avg_load = self.event_cb_time / (t2 - self.time_start)
+        self.time_start = time.time()
+        self.channel.monitor(self.__cbinternal, self.field_spec)
+        self.is_monitoring = True
+        # monitor_thread_started.set()
 
-                self.ldebug(f'ST {self.channel_name} | event callback handled in {delta:.3f}')
+        # self.monitor_thread = threading.Thread(target=runnable, name=f'streamer_{self.channel_name}', daemon=True)
+        # self.monitor_thread.start()
+        # try:
+        #    monitor_thread_started.wait(1.0)
+        # except Exception as e:
+        #    self.lerror(f'Error starting monitor thread: {e} {traceback.format_exc()}')
+        #    self.is_monitoring = False
+        # self.ldebug(f'ST {self.channel_name} | started monitor thread {self.monitor_thread.name}')
+        self.ldebug(f'ST [{self.name}] | started monitor')
+        return self.is_monitoring
 
-                if self.stop_requested:
-                    self.channel.stopMonitor()
-                    self.stop_requested = False
-                    self.is_monitoring = False
-            except Exception as e:
-                self.logger.error(f'Error in monitor callback: {e} {traceback.format_exc()}')
-            finally:
-                if self.monitor_limit is not None:
-                    self.monitor_limit -= 1
-                    if self.monitor_limit <= 0:
-                        self.logger.info(f'Monitor limit reached - stopping')
-                        self.channel.stopMonitor()
-                        self.is_monitoring = False
-
-        monitor_thread_started = threading.Event()
-
-        def runnable():
-            self.time_start = time.time()
-            self.channel.monitor(__cbinternal, self.field_spec)
-            self.is_monitoring = True
-            monitor_thread_started.set()
-
-        self.monitor_thread = threading.Thread(target=runnable, name=f'streamer_{self.channel_name}', daemon=True)
-        self.monitor_thread.start()
-        try:
-            monitor_thread_started.wait(1.0)
-        except Exception as e:
-            self.logger.error(f'Error starting monitor thread: {e} {traceback.format_exc()}')
-            self.is_monitoring = False
-        self.ldebug(f'ST {self.channel_name} | started monitor thread {self.monitor_thread.name}')
+    def start_monitor_triggered(self, trigger, limit=None):
+        self.acc.ensure_monitored(trigger)
+        self.acc.await_next_event(trigger)
+        self.start_monitor(limit)
 
     def stop_monitor(self):
         if not self.is_monitoring:
-            self.logger.error(f'No monitor running')
+            self.lerror(f'No monitor running')
             return
         self.stop_requested = True
         for i in range(200):
@@ -473,16 +505,25 @@ class DAQStreamer(ABC):
             raise Exception('Monitor thread did not stop')
         assert not self.stop_requested
 
-    def add_callback(self, name, f):
-        """ Add a callback function to be called for each new frame. """
+    def add_callback(self, name: str, f: Callable, f_kwargs: Optional[dict] = None):
+        """ Add a callback function to be called for each new frame.
+
+        :param name: Name of the callback
+        :param f:  A callable (can be a class instance)
+        :param f_kwargs: Keyword arguments to pass to the function
+         """
         # TODO: weakref
+        f_kwargs = f_kwargs or {}
         with self.event_callback_lock:
             self.cbs[name] = f
+            self.cbs_kwargs[name] = f_kwargs
 
-    def remove_callback(self, name):
+    def remove_callback(self, name: str):
+        """ Remove a callback """
         with self.event_callback_lock:
             if name in self.cbs:
                 del self.cbs[name]
+                del self.cbs_kwargs[name]
             else:
                 raise ValueError(f'No such callback {name}')
 
@@ -491,13 +532,14 @@ class DAQStreamer(ABC):
             self.cbs = {}
 
     def run_callbacks(self, pvo_dict: dict):
-        self.ldebug(f'ST {self.channel_name} | Running {len(self.cbs)} callbacks')
+        self.ldebug(f'ST [{self.name}] | Running [{len(self.cbs)}] callbacks')
         cb_results = {}
         for k, f in self.cbs.items():
             try:
-                cb_results[k] = f(streamer=self, data=pvo_dict)
+                cb_results[k] = f(streamer=self, data=pvo_dict, **self.cbs_kwargs[k])
+                self.ldebug(f'ST [{self.name}] | CB [{k}] returned [{cb_results[k]}]')
             except Exception as e:
-                self.logger.error(f'Error in callback [{k}]: {e} {traceback.format_exc()}')
+                self.lerror(f'Error in callback [{k}]: {e} {traceback.format_exc()}')
         return cb_results
 
     def get_full_buffer(self):
@@ -547,14 +589,17 @@ class ArrayStreamer(DAQStreamer, RayMixin, ABC):
     TIME_FIELD = 'time'
     TAG_FIELD = 'acqClkTimestamp'
 
-    def __init__(self, name, channel, devices, buffer_size, frame_len, fields=None, downsample=True, debug=False):
+    def __init__(self, name, channel, devices, buffer_size, frame_len, fields=None, downsample=True, debug=False,
+                 ds_window=WINDOW, ds_step=STEP):
         self.fields: list[str] = fields
         self.devices = devices
         self.frame_len = frame_len
-        self.rmmean1d = get_numba_rolling_mean_1d(frame_len)
-        self.rmmean2d = get_numba_rolling_mean_2d(frame_len)
         self.buffer_idx = 0
         self.downsample = downsample
+        self.ds_window = ds_window
+        self.ds_step = ds_step
+        self.rmmean1d = get_numba_rolling_mean_1d(frame_len, ds_window, ds_step)
+        self.rmmean2d = get_numba_rolling_mean_2d(frame_len, ds_window, ds_step)
         self.downsampled_buffer = collections.deque(maxlen=buffer_size)  # [None] * buffer_size
         super().__init__(name, channel, buffer_size, debug)
 
@@ -597,7 +642,7 @@ class ArrayStreamer(DAQStreamer, RayMixin, ABC):
 
             if tarr is None:
                 self.channel.stopMonitor()
-                self.logger.error(f'Missing time! {self.field_spec=} {x.keys()}')
+                self.lerror(f'Missing time! {self.field_spec=} {x.keys()}')
                 raise Exception(f'Missing time! {self.field_spec=} {x.keys()=}')
             # if len(bpm_names) <= self.n_channels, (f'Wrong channel count {len(bpm_names)=} {self.n_channels=}'
             #                                       f' {bpm_names=}')
@@ -606,12 +651,12 @@ class ArrayStreamer(DAQStreamer, RayMixin, ABC):
             else:
                 if self.keys != channels:
                     self.channel.stopMonitor()
-                    self.logger.error(f'Names changed {self.keys=} {channels=}')
+                    self.lerror(f'Names changed {self.keys=} {channels=}')
                     raise Exception('Names changed')
 
             if self.debug:
                 mat_shapes = [m.shape if m is not None else None for m in mat_list]
-                self.ldebug(f'ST {self.channel_name} | New data {mat_shapes=} {tarr.shape=}')
+                self.ldebug(f'ST [{self.name}] | Processed data {mat_shapes=} {tarr.shape=}')
                 if TRACE:
                     self.ldebug(f'Got {channels=}')
 
@@ -639,21 +684,21 @@ class ArrayStreamer(DAQStreamer, RayMixin, ABC):
             self.event_cb_result = {'success': True, 'tag': tag, 'cbs': cb_results, 'evcnt': self.event_cnt}
             self.event_cb_result_buffer.append(self.event_cb_result)
         except Exception as e:
-            self.logger.error(f'Error in event processing: {e} {traceback.format_exc()}')
+            self.lerror(f'Error in event processing: {e} {traceback.format_exc()}')
             self.event_cb_result = {'success': False, 'tag': None, 'cbs': {}, 'evcnt': self.event_cnt}
             self.event_cb_result_buffer.append(self.event_cb_result)
             # raise e
 
-    def get_callback_results(self):
+    def get_callback_results(self) -> dict:
         return self.event_cb_result
 
-    def get_callback_results_by_tag(self, tag):
+    def get_callback_results_by_tag(self, tag) -> Optional[dict]:
         for r in self.event_cb_result_buffer:
             if r['tag'] == tag:
                 return r
         return None
 
-    def get_available_tags(self):
+    def get_available_tags(self) -> list:
         return [x['tag'] for x in self.event_cb_result_buffer]
 
 
@@ -662,10 +707,16 @@ class TBTStreamer(ArrayStreamer, RayMixin):
     EXPECTED_TBT_FS = 352055e3 / 1296
     EXPECTED_TBT_FRAME_LEN = 27120
 
-    def __init__(self, name, sector, channel, devices=None, buffer_size=100, fields=None, downsample=True, debug=False):
+    def __init__(self, name, sector, channel, devices=None, buffer_size=100, fields=None, downsample=True,
+                 debug=False,
+                 daq_dec_factor=1, ds_window=WINDOW, ds_step=STEP):
         fields = fields or ['sum']
         self.sector = sector
-        super().__init__(name, channel, devices, buffer_size, self.EXPECTED_TBT_FRAME_LEN, fields, downsample, debug)
+        super().__init__(name, channel, devices, buffer_size,
+                         fields=fields,
+                         downsample=downsample, debug=debug,
+                         frame_len=self.EXPECTED_TBT_FRAME_LEN//daq_dec_factor,
+                         ds_window=ds_window//daq_dec_factor, ds_step=ds_step//daq_dec_factor)
 
     def get_channel_settings(self, channel) -> tuple[str, dict[str, list[tuple[str, ...]]]]:
         fields_paths, fstr = get_bpm_channel_properties(channel, self.devices, self.fields, time_field=self.TIME_FIELD,
@@ -682,9 +733,18 @@ class TBTStreamer(ArrayStreamer, RayMixin):
                                                  frame_len=self.frame_len)
 
 
+class LifetimeTBTStreamer(TBTStreamer):
+    def reset_counters(self):
+        self.ldebug(f'ST [{self.name}] | Resetting lifetime counters')
+        lt_cb: LifetimeCallback = self.cbs['lifetime']
+        lt_cb.reset_counters()
+        return True
+
+
 class FakeTBTStreamer(TBTStreamer):
-    def __init__(self, *args, daemon=True, **kwargs):
+    def __init__(self, *args, daemon=True, event_period=0.1, **kwargs):
         self.fake_source_stop = False
+        self.event_period = event_period
         self.daemon = daemon
         super().__init__(*args, **kwargs)
 
@@ -741,8 +801,8 @@ class FakeTBTStreamer(TBTStreamer):
                     self.event_cb_fault_cnt += 1
                 self.avg_load = self.event_cb_time / (t2 - self.time_start)
 
-                self.ldebug(f'ST {self.channel_name} | monitor '
-                                 f'{self.event_cb_result["tag"]} handled in {delta:.3f}')
+                self.ldebug(f'ST {self.channel_name} | monitor {self.event_cb_result["tag"]} handled in'
+                            f' {delta:.3f} at local times {t1} -> {t2}')
 
                 if self.stop_requested:
                     # self.channel.stopMonitor()
@@ -750,7 +810,7 @@ class FakeTBTStreamer(TBTStreamer):
                     self.stop_requested = False
                     self.is_monitoring = False
             except Exception as e:
-                self.logger.error(f'Error in monitor callback: {e} {traceback.format_exc()}')
+                self.lerror(f'Error in monitor callback: {e} {traceback.format_exc()}')
             finally:
                 if self.monitor_limit is not None:
                     self.monitor_limit -= 1
@@ -758,9 +818,10 @@ class FakeTBTStreamer(TBTStreamer):
                         self.logger.info(f'ST {self.channel_name} | Monitor limit reached, stopping')
                         # self.channel.stopMonitor()
                         self.fake_source_stop = True
-                        #self.is_monitoring = False
+                        # self.is_monitoring = False
 
         monitor_thread_started = threading.Event()
+
         def fake_event_source(cb):
             try:
                 self.logger.info(f'Fake event source started')
@@ -770,11 +831,11 @@ class FakeTBTStreamer(TBTStreamer):
                 monitor_thread_started.set()
                 while not self.fake_source_stop:
                     t = time.time()
-                    tarr = np.linspace(t - 0.1, t, 27120)
+                    tarr = np.linspace(t - self.event_period, t, 27120)
                     toffsetarr = tarr - tarr[0]
                     # rand_slope = np.random.rand(1) * 0.01
                     # N = np.exp(-(1/3600)*(fake_cnt*0.1))*N0
-                    N2 = np.exp(-(1 / 1800) * (fake_cnt * 0.1 + toffsetarr)) * N0
+                    N2 = np.exp(-(1 / 1800) * (fake_cnt * self.event_period + toffsetarr)) * N0
                     base_signal = N2.astype(np.float32)
                     base_x = np.random.rand(27120) * 0.01
                     # base_y = np.random.rand(27120) * 0.01
@@ -800,7 +861,7 @@ class FakeTBTStreamer(TBTStreamer):
                     t1 = time.time()
                     cb(pvo)
                     t2 = time.time()
-                    time.sleep(max(0.0, 0.1 - (t2 - t1)))
+                    time.sleep(max(0.0, self.event_period - (t2 - t1)))
             finally:
                 self.logger.info(f'Fake event source stopped')
                 self.is_monitoring = False
@@ -810,16 +871,15 @@ class FakeTBTStreamer(TBTStreamer):
             fake_thread = threading.Thread(target=fake_event_source, args=(__cbinternal,), daemon=self.daemon)
             fake_thread.start()
         except Exception as e:
-            self.logger.error(f'Error starting monitor thread: {e} {traceback.format_exc()}')
+            self.lerror(f'Error starting monitor thread: {e} {traceback.format_exc()}')
 
         monitor_thread_started.wait()
         self.ldebug(f'ST {self.channel_name} | started monitor')
-
         return self.is_monitoring
 
     def stop_monitor(self):
         if not self.is_monitoring:
-            self.logger.error(f'No monitor running')
+            self.lerror(f'No monitor running')
             return
         self.fake_source_stop = True
         self.stop_requested = True
@@ -833,8 +893,8 @@ class FakeTBTStreamer(TBTStreamer):
 
 class RayStreamerWrapper:
     PASSTHROUGH_METHODS = ['connect', 'start_monitor', 'get_callback_results_by_tag',
-                           'get_callback_results','stop_monitor','get_available_tags','clear_callbacks',
-                           'add_callback']
+                           'get_callback_results', 'stop_monitor', 'get_available_tags', 'clear_callbacks',
+                           'add_callback', 'reset_counters']
     SYNC_METHODS = ['get_perf_stats', 'get_perf_stats2']
 
     def __init__(self, ray_class, *args, reset_logging=True, **kwargs):
@@ -893,6 +953,9 @@ class LifetimeCallback:
         if self.debug:
             self.logger.debug(msg)
 
+    def reset_counters(self):
+        self.counter = 0
+
     def __call__(self, streamer: ArrayStreamer, data, st_name: str):
         from pybeamtools.physics.lifetime import compute_lifetime_exponential_v2
 
@@ -914,11 +977,12 @@ class LifetimeCallback:
                     updates[metric] = {'timestamp': time.time(), 'raw': individual}  # , 'median': median_lt
                     self.result_combined[metric].update(updates[metric])
                     self.ldebug(f"LTCB trig [{st_name=}] [{metric=}]: {mat.shape=} @ "
-                                     f"{updates[metric]['timestamp']}")
+                                f"{updates[metric]['timestamp']}")
                 else:
                     self.ldebug(f"LTCB trig [{st_name=}] [{metric=}]: NO DATA")
         self.result_last = updates  # {'updates': updates}
 
         self.counter += 1
         self.ldebug(f"LTCB {cnt=} result [{st_name=}] = {self.result_last}")
-        return self.result_combined
+        # return self.result_combined
+        return self.result_last
