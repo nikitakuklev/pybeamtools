@@ -33,7 +33,8 @@ from .pddevices import (
     SignalContext,
     TRIG,
 )
-from ..utils.logging import config_root_logging
+from ..utils.logging import config_root_logging, start_logging_thread
+
 from ..utils.pydantic import SerializableBaseModel
 
 logger = logging.getLogger(__name__)
@@ -220,6 +221,7 @@ class SignalEngineOptions(SerializableBaseModel):
 class SignalEngine:
     def __init__(self, options: SignalEngineOptions):
         config_root_logging()
+        start_logging_thread()
         self.options = self.o = options
         self.logger = logging.getLogger(self.__class__.__qualname__)
         self.TRACE = False

@@ -39,12 +39,14 @@ class SimController:
 
 
 class SoftIOC:
-    def __init__(self):
+    def __init__(self, interfaces=None, debug=False):
         self.pvdb = None
         self.stop_requested = False
         self.thread_started = False
         self.t = None
         self.thread_data = None
+        interfaces = interfaces or ["127.0.0.1"]
+        self.interfaces = interfaces
 
     def ping(self):
         logger.info("Pong")
@@ -53,11 +55,11 @@ class SoftIOC:
     def run(self):
         nest_asyncio.apply()
         logger.info("Starting loop")
-        run(self.pvdb, log_pv_names=True, interfaces=["127.0.0.1"])
+        run(self.pvdb, log_pv_names=True, interfaces=self.interfaces)
 
     def run_in_current_loop(self):
         logger.info("Starting in current loop")
-        run(self.pvdb, log_pv_names=True, interfaces=["127.0.0.1"])
+        run(self.pvdb, log_pv_names=True, interfaces=self.interfaces)
 
     def run_in_background(self, daemon=True):
         async def startup_hook(async_lib):
@@ -84,12 +86,12 @@ class SoftIOC:
                 return await ctx.run(log_pv_names=log_pv_names, startup_hook=startup_hook)
 
             asyncio.run(
-                start_server(
-                        self.pvdb,
-                        interfaces=["127.0.0.1"],
-                        log_pv_names=True,
-                        startup_hook=startup_hook,
-                )
+                    start_server(
+                            self.pvdb,
+                            interfaces=self.interfaces,
+                            log_pv_names=True,
+                            startup_hook=startup_hook,
+                    )
             )
             logger.info(f"Server run method exited")
             self.thread_started = self.stop_requested = False
@@ -115,12 +117,13 @@ class SoftIOC:
             self.t.join()
         else:
             raise Exception("No thread to join")
+
     def process_task(self, loop: asyncio.AbstractEventLoop) -> None:
         loop = asyncio.new_event_loop()
         loop.set_debug(True)
         asyncio.set_event_loop(loop)
         logger.info(f"Starting loop {loop=}")
-        run(self.pvdb, log_pv_names=True, interfaces=["127.0.0.1"])
+        run(self.pvdb, log_pv_names=True, interfaces=self.interfaces)
 
     def run_in_process(self):
         process = multiprocessing.Process(target=self.process_task)
@@ -132,12 +135,12 @@ class SoftIOC:
 
 class SimpleTuningIOC:
     def __init__(
-        self,
-        variables: list[str],
-        objectives: list[str],
-        test_variables=None,
-        # prefix: str = 'AI:',
-        noise=None,
+            self,
+            variables: list[str],
+            objectives: list[str],
+            test_variables=None,
+            # prefix: str = 'AI:',
+            noise=None,
     ):
         # self.prefix = prefix
         self.variables = variables
@@ -191,7 +194,7 @@ class SimpleTuningIOC:
             return value
 
         async def startup_handler(
-            instance: T_contra, async_lib: AsyncLibraryLayer, *args
+                instance: T_contra, async_lib: AsyncLibraryLayer, *args
         ):
             logger.info(f"Startup for {instance.name=}")
             dev = self.device_dir[instance.name]
@@ -210,33 +213,33 @@ class SimpleTuningIOC:
         self.input_names = []
         for i, el in enumerate(self.variables):
             mag = RealisticMagnet(
-                name=el,
-                value=0.0,
-                low=-5.0,
-                high=5.0,
-                noise=self.noise,
-                resolution=None,
-                model="exponential",
-                pmodel_kwargs={"decay_constant": 0.03},
+                    name=el,
+                    value=0.0,
+                    low=-5.0,
+                    high=5.0,
+                    noise=self.noise,
+                    resolution=None,
+                    model="exponential",
+                    pmodel_kwargs={"decay_constant": 0.03},
             )
             pv_ai = pvproperty(
-                name=el,
-                value=mag.setpoint,
-                record="ai",
-                get=get_setp_handler,
-                put=var_put_handler,
-                upper_ctrl_limit=5.0,
-                lower_ctrl_limit=-5.0,
-                dtype=PvpropertyDouble,
+                    name=el,
+                    value=mag.setpoint,
+                    record="ai",
+                    get=get_setp_handler,
+                    put=var_put_handler,
+                    upper_ctrl_limit=5.0,
+                    lower_ctrl_limit=-5.0,
+                    dtype=PvpropertyDouble,
             )
             pv_ao = pvproperty(
-                name=el + "_RB",
-                value=mag.value,
-                record="ao",
-                get=get_handler,
-                startup=startup_handler,
-                read_only=True,
-                dtype=PvpropertyDouble,
+                    name=el + "_RB",
+                    value=mag.value,
+                    record="ao",
+                    get=get_handler,
+                    startup=startup_handler,
+                    read_only=True,
+                    dtype=PvpropertyDouble,
             )
             all_specs.append(pv_ai)
             all_specs.append(pv_ao)
@@ -249,13 +252,13 @@ class SimpleTuningIOC:
         for i, el in enumerate(self.objectives):
             output = StaticInputDevice(name=el, value=1.0)
             pv_out = pvproperty(
-                name=el,
-                value=output.value,
-                record="ao",
-                get=get_handler,
-                read_only=True,
-                startup=startup_handler,
-                dtype=PvpropertyDouble,
+                    name=el,
+                    value=output.value,
+                    record="ao",
+                    get=get_handler,
+                    read_only=True,
+                    startup=startup_handler,
+                    dtype=PvpropertyDouble,
             )
             all_specs.append(pv_out)
             self.device_dir[el] = output
@@ -307,10 +310,10 @@ class SimpleTuningIOC:
         nest_asyncio.apply()
         logger.info("Starting loop")
         run(
-            self.pvdb,
-            log_pv_names=True,
-            # interfaces=['0.0.0.0']
-            interfaces=["127.0.0.1"],
+                self.pvdb,
+                log_pv_names=True,
+                # interfaces=['0.0.0.0']
+                interfaces=["127.0.0.1"],
         )
 
     def run_in_background(self, daemon=True):
@@ -318,10 +321,10 @@ class SimpleTuningIOC:
             asyncio.set_event_loop(loop)
             logger.info("Starting loop in separate thread")
             run(
-                self.pvdb,
-                log_pv_names=True,
-                interfaces=["0.0.0.0"],
-                # interfaces=['127.0.0.1']
+                    self.pvdb,
+                    log_pv_names=True,
+                    interfaces=["0.0.0.0"],
+                    # interfaces=['127.0.0.1']
             )
 
         loop = asyncio.new_event_loop()
@@ -331,11 +334,11 @@ class SimpleTuningIOC:
 
 class TestIOC:
     def __init__(
-        self,
-        variables: list[str],
-        objectives: list[str],
-        test_variables=None,
-        prefix: str = "AI:",
+            self,
+            variables: list[str],
+            objectives: list[str],
+            test_variables=None,
+            prefix: str = "AI:",
     ):
         self.prefix = prefix
         self.variables = variables
@@ -370,47 +373,47 @@ class TestIOC:
         async def weird_get_handler(instance: T_contra, *args):
             logger.info(f"weird_get_handler {instance=} {instance.alarm=}")
             await instance.alarm.write(
-                status=caproto.AlarmStatus.READ,
-                severity=caproto.AlarmSeverity.MAJOR_ALARM,
-                alarm_string="alarm string",
+                    status=caproto.AlarmStatus.READ,
+                    severity=caproto.AlarmSeverity.MAJOR_ALARM,
+                    alarm_string="alarm string",
             )
             # instance.write
             return None
 
         alarm = caproto.ChannelAlarm(
-            status=caproto.AlarmStatus.READ,
-            severity=caproto.AlarmSeverity.MINOR_ALARM,
-            alarm_string="alarm string",
+                status=caproto.AlarmStatus.READ,
+                severity=caproto.AlarmSeverity.MINOR_ALARM,
+                alarm_string="alarm string",
         )
 
         all_specs = []
         for i, el in enumerate(self.variables):
             mag = RealisticMagnet(
-                name=f"{i}",
-                value=0.0,
-                low=-2.0,
-                high=2.0,
-                noise=None,
-                resolution=None,
-                model="instant",
+                    name=f"{i}",
+                    value=0.0,
+                    low=-2.0,
+                    high=2.0,
+                    noise=None,
+                    resolution=None,
+                    model="instant",
             )
             pv_ai = pvproperty(
-                name=self.prefix + f"variable_{i}:AI",
-                value=mag.value,
-                record="ai",
-                get=get_handler,
-                put=put_handler,
-                upper_ctrl_limit=2.0,
-                lower_ctrl_limit=-2.0,
-                dtype=PvpropertyDouble,
+                    name=self.prefix + f"variable_{i}:AI",
+                    value=mag.value,
+                    record="ai",
+                    get=get_handler,
+                    put=put_handler,
+                    upper_ctrl_limit=2.0,
+                    lower_ctrl_limit=-2.0,
+                    dtype=PvpropertyDouble,
             )
             pv_ao = pvproperty(
-                name=self.prefix + f"variable_{i}:AO",
-                value=mag.value,
-                record="ao",
-                get=get_handler,
-                read_only=True,
-                dtype=PvpropertyDouble,
+                    name=self.prefix + f"variable_{i}:AO",
+                    value=mag.value,
+                    record="ao",
+                    get=get_handler,
+                    read_only=True,
+                    dtype=PvpropertyDouble,
             )
             all_specs.append(pv_ai)
             all_specs.append(pv_ao)
@@ -419,31 +422,31 @@ class TestIOC:
 
         for i, el in enumerate(self.variables):
             mag = RealisticMagnet(
-                name=f"{i}F",
-                value=0.0,
-                low=-2.0,
-                high=2.0,
-                noise=None,
-                resolution=None,
-                model="instant",
+                    name=f"{i}F",
+                    value=0.0,
+                    low=-2.0,
+                    high=2.0,
+                    noise=None,
+                    resolution=None,
+                    model="instant",
             )
             pv_ai = pvproperty(
-                name=self.prefix + f"variable_{i}:AIF",
-                value=mag.value,
-                record="ai",
-                get=get_handler,
-                put=bad_put_handler,
-                upper_ctrl_limit=2.0,
-                lower_ctrl_limit=-2.0,
-                dtype=PvpropertyDouble,
+                    name=self.prefix + f"variable_{i}:AIF",
+                    value=mag.value,
+                    record="ai",
+                    get=get_handler,
+                    put=bad_put_handler,
+                    upper_ctrl_limit=2.0,
+                    lower_ctrl_limit=-2.0,
+                    dtype=PvpropertyDouble,
             )
             pv_ao = pvproperty(
-                name=self.prefix + f"variable_{i}:AOF",
-                value=mag.value,
-                record="ao",
-                get=weird_get_handler,
-                read_only=True,
-                dtype=PvpropertyDouble,
+                    name=self.prefix + f"variable_{i}:AOF",
+                    value=mag.value,
+                    record="ao",
+                    get=weird_get_handler,
+                    read_only=True,
+                    dtype=PvpropertyDouble,
             )
             all_specs.append(pv_ai)
             all_specs.append(pv_ao)
@@ -453,12 +456,12 @@ class TestIOC:
         for i, el_name in enumerate(self.objectives):
             output = StaticInputDevice(name=f"objective_{i}", value=1.0)
             pv_out = pvproperty(
-                name=self.prefix + f"objective_{i}",
-                value=output.value,
-                record="ao",
-                get=get_handler,
-                read_only=True,
-                dtype=PvpropertyDouble,
+                    name=self.prefix + f"objective_{i}",
+                    value=output.value,
+                    record="ao",
+                    get=get_handler,
+                    read_only=True,
+                    dtype=PvpropertyDouble,
             )
             all_specs.append(pv_out)
             self.device_dir[self.prefix + f"objective_{i}"] = output
@@ -528,9 +531,9 @@ class TestIOC:
 
 class AsyncioQueue:
     def __init__(
-        self,
-        loop,
-        maxsize=0,
+            self,
+            loop,
+            maxsize=0,
     ):
         self._queue = asyncio.Queue(maxsize)
         self._loop = loop
@@ -589,7 +592,7 @@ class EchoIOC(SoftIOC):
             # return value
 
         async def async_updater(group, instance, async_lib, channel, q):
-            logger.info(f"SoftIOC updater for {channel=} starting")
+            logger.debug(f"SoftIOC updater for {channel=} starting")
             try:
                 while True:
                     async_q = AsyncioQueue(asyncio.get_running_loop())
@@ -614,23 +617,23 @@ class EchoIOC(SoftIOC):
             value = self.se.read_channel(channel)
             assert isinstance(value, float)
             props[f"property_{j}"] = pvproperty(
-                record="ai",
-                doc=f"echo_{i}",
-                name=ch,
-                value=value,
-                dtype=PvpropertyDouble,
-                get=functools.partial(ai_getter, channel=ch),
-                put=functools.partial(ai_putter, channel=ch),
-                startup=updater,
+                    record="ai",
+                    doc=f"echo_{i}",
+                    name=ch,
+                    value=value,
+                    dtype=PvpropertyDouble,
+                    get=functools.partial(ai_getter, channel=ch),
+                    put=functools.partial(ai_putter, channel=ch),
+                    startup=updater,
             )
             # props[f'property_{j}'].scan(5.0)
             echo_cls = EchoFactory.make(channels=props)
             # logger.debug(f'Echo class {echo_cls} {echo_cls.__dict__=}')
             mag_grp = SubGroup(
-                echo_cls,
-                channel=ch,
-                # read_fun=eval_fn,
-                prefix="",
+                    echo_cls,
+                    channel=ch,
+                    # read_fun=eval_fn,
+                    prefix="",
             )
             setattr(bl, f"channel_{i}", mag_grp)
             # logger.info(f'{mag_grp.group_dict=}')
@@ -693,7 +696,7 @@ class EchoIOCV2(SoftIOC):
         async def ai_getter(instance, *args, channel):
             value = self.se.read_channel(channel)
             logger.info(
-                f"ai_getter {instance.pvname=}: {value=} {channel=} {instance=}"
+                    f"ai_getter {instance.pvname=}: {value=} {channel=} {instance=}"
             )
             # Does not work since does not update data without triggering subs
             # instance.write(value, verify_value=False)
@@ -704,7 +707,7 @@ class EchoIOCV2(SoftIOC):
 
         async def ai_putter(instance, value, *args, channel):
             logger.info(
-                f"ai_writer {instance.pvname=}: {value=} {channel=} {instance=}"
+                    f"ai_writer {instance.pvname=}: {value=} {channel=} {instance=}"
             )
             try:
                 self.se.write_channel(channel, value)
@@ -719,7 +722,8 @@ class EchoIOCV2(SoftIOC):
         async def async_updater(instance: PvpropertyDouble,
                                 async_lib: AsyncLibraryLayer,
                                 *args,
-                                channel: str, q):
+                                channel: str, q
+                                ):
             logger.info(f"SoftIOC updater for {channel=} starting")
             try:
                 async_q = AsyncioQueue(asyncio.get_running_loop())
@@ -828,6 +832,117 @@ class EchoIOCV2(SoftIOC):
         #         logger.error(f'{instance.name=} exception {ex}')
         #     finally:
         #         logger.warning(f'{instance.name=} is exiting')
+
+
+class DynamicIOC(SoftIOC):
+    """ Soft IOC that just serves whatever is in the dictionary """
+
+    def __init__(self, data: dict[str, float], **kwargs):
+        super().__init__(**kwargs)
+        self.data = data
+        channels = list(data.keys())
+        logger.info(f"Setting up dynamic IOC with channels {channels}")
+        self.pvspecs: list[PVSpec] = []
+        self.queues = {}
+        self.getter = self.putter = self.push_updater = None
+        self.pvdb = {}
+        self.getter, self.putter, self.push_updater = self.get_funcs()
+
+        for i, (k, v) in enumerate(data.items()):
+            self.add_channel(k, v)
+
+        self.push_timestamps = {}
+
+    @property
+    def channels(self):
+        return list(self.data.keys())
+
+    def get_funcs(self):
+        async def ai_getter(instance, *args, channel):
+            value = self.data.get(channel)
+            logger.info(
+                    f"ai_getter {instance.pvname=}: {value=} {channel=} {instance=}"
+            )
+            # Does not work since does not update data without triggering subs
+            # instance.write(value, verify_value=False)
+            # Trick caproto to directly modify ChannelData, it will be returned by _read
+            instance._data["value"] = value
+            # Return none to avoid putter call
+            return None
+
+        async def ai_putter(instance, value, *args, channel):
+            logger.info(
+                    f"ai_writer {instance.pvname=}: {value=} {channel=} {instance=}"
+            )
+            try:
+                self.data[channel] = value
+                # skip official write since callback will do it
+                # return SkipWrite
+            except Exception as ex:
+                logger.error(f"Error writing {channel=} {ex} (rejecting)")
+                raise SkipWrite
+                # raise
+            return None
+
+        async def async_updater(instance: PvpropertyDouble,
+                                async_lib: AsyncLibraryLayer,
+                                *args,
+                                channel: str, q
+                                ):
+            logger.info(f"SoftIOC updater for {channel=} starting")
+            try:
+                async_q = AsyncioQueue(asyncio.get_running_loop())
+                q.queues[channel] = async_q
+                while True:
+                    # async_q = AsyncioQueue(asyncio.get_running_loop())
+                    # q.queues[channel] = async_q
+                    # logger.info(f'SoftIOC updater for {channel=} starting 2')
+                    data = await async_q.async_get()
+                    logger.debug(f"SoftIOC updater for {channel=} received {data=}")
+                    await instance.write(data, verify_value=False)
+            except Exception as ex:
+                logger.error(f"SoftIOC {channel=} exception {ex}")
+            finally:
+                logger.warning(f"Updater for {channel=} is exiting")
+
+        return ai_getter, ai_putter, async_updater
+
+    def send_updates(self, channel: str, data: float):
+        assert isinstance(data, float)
+        assert channel in self.channels
+        logger.info(f"Sending [{channel=}] = [{data=}]")
+        q = self.queues[channel]
+        q.put(data)
+        self.push_timestamps[channel] = time.time()
+
+    def set_failure_status(self, channel: str, status: bool):
+        assert channel in self.channels
+        assert isinstance(status, bool)
+        logger.info(f"Channel [{channel}] set failure to [{status}]")
+        q = self.queues[channel]
+        q.put({"op": "status", "data": status})
+
+    def add_channel(self, channel: str, value: float):
+        if channel in self.pvdb:
+            raise ValueError(f"Channel {channel} already exists")
+
+        assert isinstance(value, float), f"Invalid value {value} for {channel}"
+        self.data[channel] = value
+        prop = pvproperty(
+                record="ai",
+                doc=f"echo_{channel}",
+                name=channel,
+                value=value,
+                dtype=PvpropertyDouble,
+                get=functools.partial(self.getter, channel=channel),
+                put=functools.partial(self.putter, channel=channel),
+                startup=functools.partial(self.push_updater, channel=channel, q=self),
+                precision=6
+        )
+        self.pvdb[prop.pvspec.name] = prop.pvspec.create(group=None)
+        self.channels.append(channel)
+        logger.debug(f"Added channel {channel}")
+
 
 def DynamicPVDB():
     def __init__(self):

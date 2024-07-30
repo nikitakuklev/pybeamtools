@@ -797,7 +797,9 @@ class ModelPairDevice(EngineDevice):
     def __init__(self, options: ModelPairDeviceOptions, ctx: SignalContext = None):
         self.data = {}
         assert hasattr(options.device, "setpoint")
-        channel_map = {options.variable_name: {}, options.readback_name: {}}
+        channel_map = {options.variable_name: {}}
+        if options.readback_name is not None:
+            channel_map[options.readback_name] = {}
         super().__init__(
             options,
             ctx,
