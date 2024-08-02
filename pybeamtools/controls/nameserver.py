@@ -307,6 +307,8 @@ class NSServer:
         self.router = APIRouter()
         self.router.add_api_route("/ns", self.update_item, methods=["PUT"])
         self.router.add_api_route("/ns_bulk", self.update_items, methods=["POST"])
+        self.router.add_api_route("/del_bulk", self.remove_items, methods=["POST"])
+        self.router.add_api_route("/list", self.list_items, methods=["GET"])
         self.logger = logging.getLogger(__name__)
 
     async def update_item(self, channel: str, address: str, port: int, timeout: float):
@@ -334,6 +336,15 @@ class NSServer:
         self.ctx.pvdb.update(updates)
         return {"status": 1}
 
+    async def remove_items(self, channels: list[str]):
+        self.logger.info(f"NSSERVER | Remove {channels}")
+        for channel in channels:
+            # Don't error on missing channels
+            self.ctx.pvdb.pop(channel, None)
+        return {"status": 1}
+
+    async def list_items(self):
+        return self.ctx.pvdb
 
 class NSClient:
     def __init__(self, nameserver='cadmus.aps4.anl.gov', port=6064):
@@ -358,6 +369,19 @@ class NSClient:
                         timeout=0.2)
         assert r.status_code == 200, f"Error {r.status_code} {r.text} when updating NS"
         assert r.json()['status'] == 1
+        return r.json()
+
+    def remove_channels(self, channels: list[str]):
+        r = self.s.post(f"http://{self.ns_addr}:{self.ns_port}/del_bulk",
+                        json=channels,
+                        timeout=0.2)
+        assert r.status_code == 200, f"Error {r.status_code} {r.text} when removing channels"
+        assert r.json()['status'] == 1
+        return r.json()
+
+    def list_channels(self):
+        r = self.s.get(f"http://{self.ns_addr}:{self.ns_port}/list")
+        assert r.status_code == 200, f"Error {r.status_code} {r.text} when listing channels"
         return r.json()
 
 logger = logging.getLogger(__name__)

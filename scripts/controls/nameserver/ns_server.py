@@ -36,7 +36,7 @@ if __name__ == "__main__":
     else:
         interfaces = [ip, bcastip, '127.0.0.1']
 
-    # permanent mapping
+    # permanent mapping, others will be added by clients
     pvdb = {'AOP:IOC:TEST1': ('127.0.0.2', 12345, -1.0)}
 
     try:

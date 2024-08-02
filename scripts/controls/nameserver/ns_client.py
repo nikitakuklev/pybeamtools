@@ -41,6 +41,12 @@ if __name__ == "__main__":
             try:
                 nsc.publish_channels(channels=list(sioc.pvdb.keys()), address=ip, port=port, timeout=60)
                 logging.info(f'Published {sioc.pvdb.keys()} to NS')
+                logging.info(nsc.list_channels())
+
+                if t == 0:
+                    # Clients can check list of and remove channels
+                    nsc.remove_channels(channels=['AOP:CONSTANT'])
+                    logging.info(nsc.list_channels())
             except Exception as ex:
                 logging.error(f'Couldnt update NS', exc_info=True, stack_info=True)
             finally:
