@@ -1,4 +1,3 @@
-import functools
 import logging
 import os
 import signal
@@ -8,22 +7,27 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Optional
+import numpy as np
+from datetime import datetime
+
+from pybeamtools.aps.runcontrol.rc import RunControlClient
 
 # os.environ['MKL_NUM_THREADS'] = '1'
 # os.environ['NUMEXPR_NUM_THREADS'] = '1'
 os.environ["OMP_NUM_THREADS"] = "2"
 # os.environ['LD_PRELOAD'] = '/home/oxygen16/NKUKLEV/anaconda3/envs/py311ml/lib/libstdc++.so.6'
-os.environ[
-    'EPICS_PVA_ADDR_LIST'] = 'c2ioc02.aps4.anl.gov pslmcam1.aps4.anl.gov pslmcam2.aps4.anl.gov bslmcam1.aps4.anl.gov  daq-dss02.aps4.anl.gov daq-dss04.aps4.anl.gov daq-dss06.aps4.anl.gov daq-dss08.aps4.anl.gov daq-dss10.aps4.anl.gov daq-dss11.aps4.anl.gov daq-dss14.aps4.anl.gov daq-dss16.aps4.anl.gov daq-dss18.aps4.anl.gov daq-dss20.aps4.anl.gov daq-dss21.aps4.anl.gov daq-dss24.aps4.anl.gov daq-dss26.aps4.anl.gov daq-dss28.aps4.anl.gov daq-dss30.aps4.anl.gov daq-dss31.aps4.anl.gov daq-dss34.aps4.anl.gov daq-dss36.aps4.anl.gov daq-dss37.aps4.anl.gov daq-dss40.aps4.anl.gov daq-qss02.aps4.anl.gov daq-qss11.aps4.anl.gov daq-qss21.aps4.anl.gov daq-qss31.aps4.anl.gov llrf-amc758-7.aps4.anl.gov rfdaqsrv-1.aps4.anl.gov'
-os.environ['EPICS_AR_PORT'] = '7002'
-
-import numpy as np
-from datetime import datetime
-
+os.environ["EPICS_PVA_ADDR_LIST"] = (
+    "c2ioc02.aps4.anl.gov pslmcam1.aps4.anl.gov pslmcam2.aps4.anl.gov bslmcam1.aps4.anl.gov  daq-dss02.aps4.anl.gov daq-dss04.aps4.anl.gov daq-dss06.aps4.anl.gov daq-dss08.aps4.anl.gov daq-dss10.aps4.anl.gov daq-dss11.aps4.anl.gov daq-dss14.aps4.anl.gov daq-dss16.aps4.anl.gov daq-dss18.aps4.anl.gov daq-dss20.aps4.anl.gov daq-dss21.aps4.anl.gov daq-dss24.aps4.anl.gov daq-dss26.aps4.anl.gov daq-dss28.aps4.anl.gov daq-dss30.aps4.anl.gov daq-dss31.aps4.anl.gov daq-dss34.aps4.anl.gov daq-dss36.aps4.anl.gov daq-dss37.aps4.anl.gov daq-dss40.aps4.anl.gov daq-qss02.aps4.anl.gov daq-qss11.aps4.anl.gov daq-qss21.aps4.anl.gov daq-qss31.aps4.anl.gov llrf-amc758-7.aps4.anl.gov rfdaqsrv-1.aps4.anl.gov"
+)
+os.environ["EPICS_AR_PORT"] = "7002"
 from pybeamtools.controlsdirect.clib import Accelerator
-from pybeamtools.aps.daq.streamer import FakeTBTStreamer, LifetimeCallback, LifetimeTBTStreamer, RayStreamerWrapper, \
-    TBTStreamer
-
+from pybeamtools.aps.daq.streamer import (
+    FakeTBTStreamer,
+    LifetimeCallback,
+    LifetimeTBTStreamer,
+    RayStreamerWrapper,
+    TBTStreamer,
+)
 from pybeamtools.sim.softioc import DynamicIOC
 from pybeamtools.utils.logging import config_root_logging
 
@@ -41,26 +45,30 @@ def deep_update_dict(d, u):
 
 
 class DAQProcessor:
-    DAQ_CYCLE = 0.100167
+   # DAQ_CYCLE = 0.100167
     STREAMER_CLASS = TBTStreamer
 
-    def __init__(self,
-                 channel_format: str = "S{s}-DAQTBT:Raw:Data",
-                 sectors: Optional[list[int]] = None,
-                 show_table: bool = True,
-                 reset_logging: bool = True,
-                 verbosity: int = logging.INFO,
-                 ):
-
+    def __init__(
+        self,
+        channel_format: str = "S{s}-DAQTBT:Raw:Data",
+        sectors: Optional[list[int]] = None,
+        show_table: bool = True,
+        reset_logging: bool = True,
+        run_control: str = None,
+        verbosity: int = logging.INFO,
+        ioc_verbosity: int = logging.DEBUG,
+    ):
         if reset_logging:
             config_root_logging(reset_handlers=True)
 
-        logging.getLogger('ray').setLevel(logging.INFO)
+        logging.getLogger("ray").setLevel(logging.INFO)
 
         # if verbosity >= logging.INFO:
-        logging.getLogger('pybeamtools.sim.softioc').setLevel(verbosity)
+        logging.getLogger("pybeamtools.sim.softioc").setLevel(ioc_verbosity)
+        logging.getLogger("caproto").setLevel(ioc_verbosity)
 
         import faulthandler
+
         faulthandler.enable(file=sys.stderr)
 
         self.streamers = {}
@@ -71,6 +79,10 @@ class DAQProcessor:
         self.console = None
         self.verbosity = verbosity
         self.debug = verbosity <= logging.DEBUG
+        self.run_control = run_control
+        self.rc = None
+        if run_control is not None:
+            self.rc = RunControlClient(record=self.run_control, desc=f"{self.__class__.__name__} run control")
         # self.setup_streamers(channel_format, sectors)
 
     def ldebug(self, msg, *args, **kwargs):
@@ -84,30 +96,31 @@ class DAQProcessor:
     def setup_streamers(self):
         for s in self.sectors:
             try:
-                c_formatted = self.channel_format.format(s=f'{s:02d}')
-                st_key = f'st_{s:02d}'
-                st = self.STREAMER_CLASS(name=st_key,
-                                         sector=s,
-                                         channel=c_formatted,
-                                         debug=self.debug,
-                                         )
+                c_formatted = self.channel_format.format(s=f"{s:02d}")
+                st_key = f"st_{s:02d}"
+                st = self.STREAMER_CLASS(
+                    name=st_key,
+                    sector=s,
+                    channel=c_formatted,
+                    debug=self.debug,
+                )
                 self.streamers[st_key] = st
                 self.streamer_sectors[st_key] = s
             except Exception as ex:
-                logger.error(f'Failed to connect to sector {s} - exception {ex}')
+                logger.error(f"Failed to connect to sector {s} - exception {ex}")
                 raise ex
 
         for st_name, st in self.streamers.items():
             st.connect()
-            assert st.is_connected, f'Streamer [{st_name}] failed to connect'
+            assert st.is_connected, f"Streamer [{st_name}] failed to connect"
 
         self.ldebug(f"Connected to {len(self.streamers)} streamers")
 
     def start_streamers(self, limit: int = None):
-        """ Start monitoring the PVA channels and processing events """
+        """Start monitoring the PVA channels and processing events"""
 
         def signal_handler(sig, frame):
-            logger.warning('Got Ctrl+C - stopping!')
+            logger.warning("Got Ctrl+C - stopping!")
             for st in self.streamers.values():
                 st.stop_monitor()
             time.sleep(0.2)
@@ -117,7 +130,7 @@ class DAQProcessor:
 
         for st in self.streamers.values():
             st.start_monitor(limit=limit)
-            assert st.is_monitoring, f'Streamer [{st}] failed to start!'
+            assert st.is_monitoring, f"Streamer [{st}] failed to start!"
 
         logger.info(f"Started monitoring {len(self.streamers)} streamers: {self.streamers.keys()}")
 
@@ -126,7 +139,7 @@ class DAQProcessor:
         #     self.start_table_update_thread()
 
     def start_table_update_thread(self, period: float = 1.0):
-        """ Optional thread to update a CLI table with stats for live monitoring """
+        """Optional thread to update a CLI table with stats for live monitoring"""
         from rich.console import Console
         from rich.live import Live
 
@@ -158,9 +171,10 @@ class DAQProcessor:
         pass
 
     def make_stats_table(self):
-        self.ldebug(f"Generating stats table")
+        self.ldebug("Generating stats table")
 
         from rich.table import Table
+
         extra_columns = self.generate_table_columns()
 
         self.ldebug(f"Stats table extra columns: {extra_columns}")
@@ -186,32 +200,32 @@ class DAQProcessor:
             return mvalue
 
         for i, (s, st) in enumerate(self.streamers.items()):
-            extra_col_vals = [f'{get_ex_value(metric, s)}' for metric in extra_columns]
+            extra_col_vals = [f"{get_ex_value(metric, s)}" for metric in extra_columns]
             vals = st.get_perf_stats()
             table.add_row(
-                    f'{s}',
-                    f'{vals["event_cb_thread_id"]}',
-                    f'{vals["event_cb_process_id"]}',
-                    f'{vals["load"]:.3f}',
-                    f'{vals["event_cb_avg_time"] * 1e3:.3f}',
-                    f'{vals["event_cnt"]}',
-                    f'{vals["event_rate"]:.2f}',
-                    f'{max(vals["event_cb_time_history"]):.6f}',
-                    *extra_col_vals
+                f"{s}",
+                f'{vals["event_cb_thread_id"]}',
+                f'{vals["event_cb_process_id"]}',
+                f'{vals["load"]:.3f}',
+                f'{vals["event_cb_avg_time"] * 1e3:.3f}',
+                f'{vals["event_cnt"]}',
+                f'{vals["event_rate"]:.2f}',
+                f'{max(vals["event_cb_time_history"]):.6f}',
+                *extra_col_vals,
             )
         return table
 
 
-def set_daq_decimator(pid, source=None, decfactor=32, avgmode='Avg', daqroot='DAQTBT'):
+def set_daq_decimator(pid, source=None, decfactor=32, avgmode="Avg", daqroot="DAQTBT"):
     assert 1 <= pid <= 5 and isinstance(pid, int) and isinstance(decfactor, int)
     d = {}
     for s in range(1, 40, 2):
-        root = f'S{s:02d}-{daqroot}:Dec{pid}'
+        root = f"S{s:02d}-{daqroot}:Dec{pid}"
         if source is not None:
-            d[f'{root}:NDArrayPortM'] = source
-        d[f'{root}:AvgModeC'] = avgmode
-        d[f'{root}:DecFactorC'] = decfactor
-        d[f'{root}:EnableCallbacksC'] = 1
+            d[f"{root}:NDArrayPortM"] = source
+        d[f"{root}:AvgModeC"] = avgmode
+        d[f"{root}:DecFactorC"] = decfactor
+        d[f"{root}:EnableCallbacksC"] = 1
     acc.write(d)
 
 
@@ -219,46 +233,58 @@ class LifetimeProcessor(DAQProcessor, ABC):
     STREAMER_CLASS = LifetimeTBTStreamer
     EXPECTED_TBT_FRAME_LEN = 27120
 
-    def __init__(self,
-                 channel_format: str = "S{s}-DAQTBT:Raw:Data",
-                 publish_format: str = "AOP:S{s}-DAQTBT:{x}",
-                 sectors: list[int] = None,
-                 ds_window: int = None,
-                 ds_step: int = None,
-                 daq_dec_factor=32,
-                 lifetime_processors: dict = None,
-                 trigger_mode: str = 'periodic',
-                 trigger_params: dict = None,
-                 show_table: bool = True,
-                 reset_logging: bool = True,
-                 verbosity: int = logging.INFO,
-                 streamer_kwargs: dict = None
-                 ):
-        super().__init__(channel_format=channel_format, sectors=sectors, show_table=show_table,
-                         reset_logging=reset_logging, verbosity=verbosity)
+    def __init__(
+        self,
+        channel_format: str = "S{s}-DAQTBT:Raw:Data",
+        publish_format: str = "AOP:S{s}-DAQTBT:{x}",
+        sectors: list[int] = None,
+        ds_window: int = None,
+        ds_step: int = None,
+        daq_dec_factor=32,
+        lifetime_processors: dict = None,
+        trigger_mode: str = "periodic",
+        trigger_params: dict = None,
+        show_table: bool = True,
+        reset_logging: bool = True,
+        run_control: str = None,
+        interfaces: list[str] = None,
+        verbosity: int = logging.INFO,
+        ioc_verbosity: int = logging.WARNING,
+        streamer_kwargs: dict = None,
+    ):
+        super().__init__(
+            channel_format=channel_format,
+            sectors=sectors,
+            show_table=show_table,
+            run_control=run_control,
+            reset_logging=reset_logging,
+            verbosity=verbosity,
+            ioc_verbosity=ioc_verbosity,
+        )
         if lifetime_processors is None:
             lifetime_processors = {  # 'Lifetime5Hz': (2, 4),
-                'Lifetime1s': (5, 10),
-                'Lifetime2s': (10, 20),
+                "Lifetime1s": (5, 10),
+                "Lifetime2s": (10, 20),
                 # 'Lifetime5s': (50, 100)
             }
         self.streamer_kwargs = streamer_kwargs or {}
         self.ds_window = ds_window
         self.ds_step = ds_step
         self.ldebug(f"Using {ds_window=} {ds_step=} for {self.EXPECTED_TBT_FRAME_LEN//daq_dec_factor=} samples")
-        self.streamer_kwargs['ds_window'] = ds_window
-        self.streamer_kwargs['ds_step'] = ds_step
-        self.streamer_kwargs['daq_dec_factor'] = daq_dec_factor
+        self.streamer_kwargs["ds_window"] = ds_window
+        self.streamer_kwargs["ds_step"] = ds_step
+        self.streamer_kwargs["daq_dec_factor"] = daq_dec_factor
         self.lifetime_processors = lifetime_processors
         self.trigger_mode = trigger_mode
         if trigger_params is None:
-            if trigger_mode == 'periodic':
-                trigger_params = {'polling_period': 0.1}
-            elif trigger_mode == 'trigger':
-                trigger_params = {'trigger_channel': 'MCR-MT:EVR1:DAQClkCntM',
-                                  'subsample': 5,
-                                  'delay': 0.05
-                                  }
+            if trigger_mode == "periodic":
+                trigger_params = {"polling_period": 0.1}
+            elif trigger_mode == "trigger":
+                trigger_params = {
+                    "trigger_channel": "MCR-MT:EVR1:DAQClkCntM",
+                    "subsample": 5,
+                    "delay": 0.05,
+                }
         self.trigger_params = trigger_params
         self.publish_format = publish_format
         self.n_agg = 0
@@ -270,18 +296,22 @@ class LifetimeProcessor(DAQProcessor, ABC):
 
         pvdb = {}
         for x in lifetime_processors.keys():
-            pvdb.update({f"AOP:S-DAQTBT:{x}": 0.0,
-                         f"AOP:S-DAQTBT:{x}:Max": 0.0,
-                         f"AOP:S-DAQTBT:{x}:Min": 0.0,
-                         #f"AOP:S-DAQTBT:{x}:Mean": 0.0,
-                         f"AOP:S-DAQTBT:{x}:Std": 0.0,
-                         **{f"AOP:S{i:02d}-DAQTBT:{x}": 0.0 for i in self.sectors}
-                         })
-        self.sioc = sioc = DynamicIOC(data=pvdb, interfaces=["0.0.0.0"])
+            pvdb.update(
+                {
+                    f"AOP:S-DAQTBT:{x}": 0.0,
+                    f"AOP:S-DAQTBT:{x}:Max": 0.0,
+                    f"AOP:S-DAQTBT:{x}:Min": 0.0,
+                    # f"AOP:S-DAQTBT:{x}:Mean": 0.0,
+                    f"AOP:S-DAQTBT:{x}:Std": 0.0,
+                    **{f"AOP:S{i:02d}-DAQTBT:{x}": 0.0 for i in self.sectors},
+                }
+            )
+        interfaces = interfaces or ["0.0.0.0"]
+        self.sioc = sioc = DynamicIOC(data=pvdb, interfaces=interfaces)
         sioc.run_in_background()
 
         self.ldebug(f"Started soft IOC with {pvdb=}")
-        logger.info(f'Processor coordinates: {threading.get_ident(), os.getpid(), socket.gethostname()}')
+        logger.info(f"Processor coordinates: {threading.get_ident(), os.getpid(), socket.gethostname()}")
 
     def setup_streamers(self):
         super().setup_streamers()
@@ -289,9 +319,9 @@ class LifetimeProcessor(DAQProcessor, ABC):
             ltcb = LifetimeCallback(self.lifetime_processors, self.debug)
             v.clear_callbacks()
             # v.add_callback(functools.partial(timing_callback, k=k))
-            v.add_callback('lifetime', ltcb, f_kwargs=dict(st_name=s))
+            v.add_callback("lifetime", ltcb, f_kwargs=dict(st_name=s))
 
-        self.ldebug(f"Added lifetime callback to streamers")
+        self.ldebug("Added lifetime callback to streamers")
 
     def reset_counters(self):
         for s, v in self.streamers.items():
@@ -301,17 +331,17 @@ class LifetimeProcessor(DAQProcessor, ABC):
         formatter = lambda x: f"{x:.3f}"
         columns = {}
 
-        if 'median_by_streamer' not in self.overall_processed:
-            logger.warning(f"Last processed data is missing median_by_streamer")
+        if "median_by_streamer" not in self.overall_processed:
+            logger.warning("Last processed data is missing median_by_streamer")
             return columns
 
-        for metric, v in self.overall_processed['median_by_streamer'].items():
+        for metric, v in self.overall_processed["median_by_streamer"].items():
             columns[metric] = {s: formatter(v2) for s, v2 in v.items()}
 
         if self.last_agg is not None:
-            columns['last_tag'] = {k: v['tag'] for k, v in self.last_agg.items()}
+            columns["last_tag"] = {k: v["tag"] for k, v in self.last_agg.items()}
         else:
-            columns['last_tag'] = {k: 'NA' for k in self.streamers.keys()}
+            columns["last_tag"] = {k: "NA" for k in self.streamers.keys()}
 
         self.ldebug(f"Generated extra table columns: {columns}")
 
@@ -324,24 +354,24 @@ class LifetimeProcessor(DAQProcessor, ABC):
         return results
 
     def get_sector_channel(self, sector: int, mode: str) -> str:
-        return self.publish_format.format(s=f'{sector:02d}', x=mode)
+        return self.publish_format.format(s=f"{sector:02d}", x=mode)
 
     def get_global_channel(self, mode: str) -> str:
-        return self.publish_format.format(s='', x=mode)
+        return self.publish_format.format(s="", x=mode)
 
     def get_current_tag(self):
-        tcycle, ncycle = acc.get_latest_buffer_value('MCR-MT:EVR1:DAQClkCntM')
-        tag = (int(tcycle), int((tcycle - int(tcycle)) * 1e1) * 100)
+        tcycle, ncycle = acc.get_latest_buffer_value("MCR-MT:EVR1:DAQClkCntM")
+        tag = (int(tcycle), int((tcycle - int(tcycle)) * 1e2) * 10)
         return tag
 
     def get_data_tag(self, offset=1) -> Optional[tuple[int, int]]:
-        buf = acc.get_buffer('MCR-MT:EVR1:DAQClkCntM')
+        buf = acc.get_buffer("MCR-MT:EVR1:DAQClkCntM")
         if buf is None:
             return None
         if len(buf) < offset + 1:
             return None
         t = buf[-offset - 1][1].metadata.timestamp
-        tag = (int(t), int((t - int(t)) * 1e1) * 100)
+        tag = (int(t), int((t - int(t)) * 1e2) * 10)
         return tag
 
     def process_streamer_results(self, aggregated_results: dict[str, dict[str, Any]] = None):
@@ -354,14 +384,14 @@ class LifetimeProcessor(DAQProcessor, ABC):
             if st_result is None:
                 logger.warning(f"Skipping [{st_name}] with no results")
                 continue
-            if not st_result['success']:
+            if not st_result["success"]:
                 logger.warning(f"Skipping [{st_name}] with failed results")
                 continue
-            if 'lifetime' not in st_result['cbs']:
+            if "lifetime" not in st_result["cbs"]:
                 logger.warning(f"Skipping [{st_name}] without lifetime data")
                 continue
-            tag = st_result['tag']
-            ltr = st_result['cbs']['lifetime']
+            tag = st_result["tag"]
+            ltr = st_result["cbs"]["lifetime"]
             # sector = self.streamers[st_name].sector
             sector = self.streamer_sectors[st_name]
             for metric in self.lifetime_processors:
@@ -373,12 +403,12 @@ class LifetimeProcessor(DAQProcessor, ABC):
                     #     raise ValueError(f"Missing raw data for {metric} in {st_name} - have {ltr}")
                     # df: pd.DataFrame = ltr[metric]['df']
                     # dfdict = df.to_dict(orient='records')[0]
-                    timestamp = ltr[metric]['timestamp']
+                    timestamp = ltr[metric]["timestamp"]
                     delta = t1 - timestamp
                     if delta > 2.0:
                         logger.warning(f"Skipping old data for [{st_name}] - time delta {delta:.3f} sec")
                         continue
-                    dfdict = ltr[metric]['raw']
+                    dfdict = ltr[metric]["raw"]
                     updates[metric].update(dfdict)
                     # updates_by_streamer[metric][st_name] = ltr[metric]['median']
                     updates_by_streamer[metric][st_name] = np.median(list(dfdict.values()))
@@ -387,16 +417,16 @@ class LifetimeProcessor(DAQProcessor, ABC):
                     # self.ldebug(f"{ltr[metric]['median']=} ")
 
         self.last_processed = {}
-        self.last_processed['median_by_streamer'] = updates_by_streamer
-        self.last_processed['raw'] = updates
-        self.last_processed['by_sector'] = {}
+        self.last_processed["median_by_streamer"] = updates_by_streamer
+        self.last_processed["raw"] = updates
+        self.last_processed["by_sector"] = {}
         for metric in updates_by_sector:
-            self.last_processed['by_sector'][metric] = {}
+            self.last_processed["by_sector"][metric] = {}
             for sector, v in updates_by_sector[metric].items():
                 if len(v) == 0:
                     # logger.warning(f"Skipping empty update for [{metric=}][{sector=}]")
                     continue
-                self.last_processed['by_sector'][metric][sector] = np.median(list(v.values()))
+                self.last_processed["by_sector"][metric][sector] = np.median(list(v.values()))
             # if metric not in self.last_processed['by_sector']:
             # self.last_processed['by_sector'][metric] = {s: np.median(list(v.values())) for s, v in
             #                                                 updates_by_sector[metric].items()}
@@ -412,7 +442,7 @@ class LifetimeProcessor(DAQProcessor, ABC):
         #         sector = self.streamers[st_name].sector
         #         pv_updates[self.get_sector_channel(sector, metric)] = m
 
-        updates = self.last_processed['raw']
+        updates = self.last_processed["raw"]
         for metric, v in updates.items():
             if len(v) == 0:
                 if self.debug:
@@ -427,6 +457,15 @@ class LifetimeProcessor(DAQProcessor, ABC):
             assert isinstance(v, float), f"Invalid value type for {k}={v}"
             self.sioc.send_updates(k, v)
             time.sleep(0)
+
+    def shutdown(self):
+        logger.warning("Got Ctrl+C - stopping!")
+        self.is_agg_running = False
+        for st in self.streamers.values():
+            st.stop_monitor()
+        time.sleep(0.5)
+        logger.warning('Goodbye!')
+        sys.exit(0)
 
     def start_aggregator_thread(self):
         def agg_logic(tag):
@@ -444,10 +483,10 @@ class LifetimeProcessor(DAQProcessor, ABC):
                         self.ldebug(f">>> [{k}] {v=}")
 
                 self.process_streamer_results(results)
-                print_keys = ['median_by_streamer']
-                tdict = {k:self.last_processed[k] for k in print_keys}
+                print_keys = ["median_by_streamer"]
+                tdict = {k: self.last_processed[k] for k in print_keys}
                 self.linfo(f"PROC | agg results {tdict}")
-                self.linfo(f"-------------------------------------")
+                self.linfo("-------------------------------------")
                 self.n_agg += 1
             except:
                 logger.exception("Exception in aggregator thread", exc_info=True, stack_info=True)
@@ -455,11 +494,14 @@ class LifetimeProcessor(DAQProcessor, ABC):
         def f():
             t0 = time.time()
             logger.debug(f"Hello from aggregator thread at {t0}")
-            acc.ensure_monitored('MCR-MT:EVR1:DAQClkCntM')
+            acc.ensure_monitored("MCR-MT:EVR1:DAQClkCntM")
             self.is_agg_running = True
             self.last_tag = None
-            if self.trigger_mode == 'periodic':
-                polling_period = self.trigger_params['polling_period']
+            if self.rc is not None:
+                self.rc.start()
+
+            if self.trigger_mode == "periodic":
+                polling_period = self.trigger_params["polling_period"]
                 tgoal = time.time() + polling_period
                 while self.is_agg_running:
                     if self.last_tag is None:
@@ -473,23 +515,37 @@ class LifetimeProcessor(DAQProcessor, ABC):
                     tgoal += polling_period
                     time.sleep(tleft)
 
-            elif self.trigger_mode == 'trigger':
-                trigger_channel = self.trigger_params['trigger_channel']
-                subsample = self.trigger_params['subsample']
-                delay = self.trigger_params['delay']
+            elif self.trigger_mode == "trigger":
+                trigger_channel = self.trigger_params["trigger_channel"]
+                subsample = self.trigger_params["subsample"]
+                delay = self.trigger_params["delay"]
                 acc.ensure_monitored(trigger_channel)
                 acc.await_event_tag(trigger_channel, 2)
                 current_tag = acc.get_buffer_tag(trigger_channel)
                 target_tag = current_tag + subsample
                 while self.is_agg_running:
+                    self.rc.heartbeat()
+                    if self.rc.check_suspend():
+                        logger.warning("Got suspend signal - looping until resume")
+                        self.rc.msg("Suspend received")
+                        while self.rc.check_suspend():
+                            time.sleep(0.1)
+                        self.rc.msg("Resuming")
+                        logger.warning("Resuming after suspend")
+                    if self.rc.check_abort():
+                        logger.warning("Got abort signal - stopping")
+                        self.rc.msg("Abort received")
+                        self.shutdown()
                     evt, evd = acc.await_event_tag(trigger_channel, target_tag)
                     data_tag = self.get_data_tag(offset=1)
                     if data_tag is None:
                         logger.warning(f"Skipping trigger event {target_tag} - no data tag")
                         target_tag += subsample
                         continue
-                    self.linfo(f"PROC | agg trig [{target_tag}] (+{delay=}) on [{trigger_channel}]=[{evd}]@[{evt}] at "
-                               f"local time [{time.time()}]")
+                    self.linfo(
+                        f"PROC | agg trig [{target_tag}] (+{delay=}) on [{trigger_channel}]=[{evd}]@[{evt}] at "
+                        f"local time [{time.time()}]"
+                    )
                     time.sleep(delay)
                     agg_logic(data_tag)
                     target_tag += subsample
@@ -497,20 +553,21 @@ class LifetimeProcessor(DAQProcessor, ABC):
                     #    self.ldebug(f"PROC | agg trig {trig_cnt} on {trigger_channel} at {time.time()} (skipped)")
                     # trig_cnt += 1
 
-        self.agg_thread = threading.Thread(target=f, name='aggregator_thread', daemon=True)
+        self.agg_thread = threading.Thread(target=f, name="aggregator_thread", daemon=True)
         self.agg_thread.start()
-        self.ldebug(f"Started aggregator thread")
+        self.ldebug("Started aggregator thread")
         return self.agg_thread
 
     def stop_aggregator_thread(self):
         self.is_agg_running = False
         self.agg_thread.join()
-        self.ldebug(f"Stopped aggregator thread")
+        self.ldebug("Stopped aggregator thread")
 
 
 class RayLifetimeProcessor(LifetimeProcessor):
     def get_streamer_results(self, tag) -> dict[str, dict[str, Any]]:
         import ray
+
         results = {}
         for s, v in self.streamers.items():
             results[s] = v.get_callback_results_by_tag.remote(tag)
@@ -520,22 +577,24 @@ class RayLifetimeProcessor(LifetimeProcessor):
 
     def setup_streamers(self):
         import ray
+
         for s in self.sectors:
             try:
-                c_formatted = self.channel_format.format(s=f'{s:02d}')
-                st_key = f'st_{s:02d}'
-                st = RayStreamerWrapper(self.STREAMER_CLASS,
-                                        name=st_key,
-                                        sector=s,
-                                        channel=c_formatted,
-                                        fields=['sum'],
-                                        debug=self.debug,
-                                        **self.streamer_kwargs
-                                        )
+                c_formatted = self.channel_format.format(s=f"{s:02d}")
+                st_key = f"st_{s:02d}"
+                st = RayStreamerWrapper(
+                    self.STREAMER_CLASS,
+                    name=st_key,
+                    sector=s,
+                    channel=c_formatted,
+                    fields=["sum"],
+                    debug=self.debug,
+                    **self.streamer_kwargs,
+                )
                 self.streamers[st_key] = st
                 self.streamer_sectors[st_key] = s
             except Exception as ex:
-                logger.error(f'Failed to connect to sector {s} - exception {ex}')
+                logger.error(f"Failed to connect to sector {s} - exception {ex}")
                 raise ex
 
         futures = {}
@@ -545,25 +604,22 @@ class RayLifetimeProcessor(LifetimeProcessor):
         for st_name, st in self.streamers.items():
             ltcb = LifetimeCallback(self.lifetime_processors, self.debug)
             st.clear_callbacks.remote()
-            r = st.add_callback.remote('lifetime', ltcb, f_kwargs=dict(st_name=st_name))
+            r = st.add_callback.remote("lifetime", ltcb, f_kwargs=dict(st_name=st_name))
             ray.get(r)
-
-        # time.sleep(0.1)
 
         results = {k: v for k, v in zip(futures.keys(), ray.get(list(futures.values())))}
         for k, v in results.items():
             if not v:
-                logger.error(f'Streamer [{k}] failed to connect')
-                raise Exception(f'Streamer [{k}] failed to connect')
+                logger.error(f"Streamer [{k}] failed to connect")
+                raise Exception(f"Streamer [{k}] failed to connect")
             else:
-                logger.info(f'Streamer [{k}]=[{v}] connected')
-
-        #    assert st.is_connected, f'Streamer [{st_name}] failed to connect'
+                logger.info(f"Streamer [{k}]=[{v}] connected")
 
         self.ldebug(f"Connected to {len(self.streamers)} streamers")
 
     def reset_counters(self):
         import ray
+
         futures = {}
         for st_name, st in self.streamers.items():
             futures[st_name] = st.reset_counters.remote()
@@ -571,17 +627,17 @@ class RayLifetimeProcessor(LifetimeProcessor):
         results = {k: v for k, v in zip(futures.keys(), ray.get(list(futures.values())))}
         for k, v in results.items():
             if not v:
-                logger.error(f'Streamer [{k}] failed reset')
-                raise Exception(f'Streamer [{k}] failed reset')
+                logger.error(f"Streamer [{k}] failed reset")
+                raise Exception(f"Streamer [{k}] failed reset")
             else:
-                logger.info(f'Streamer [{k}]=[{v}] reset')
+                logger.info(f"Streamer [{k}]=[{v}] reset")
 
     def start_streamers(self, limit: int = None):
-        """ Start monitoring the PVA channels and processing events """
+        """Start monitoring the PVA channels and processing events"""
         import ray
 
         def signal_handler(sig, frame):
-            logger.warning('Got Ctrl+C - stopping!')
+            logger.warning("Got Ctrl+C - stopping!")
             self.stop_aggregator_thread()
             for st in self.streamers.values():
                 st.stop_monitor.remote()
@@ -597,17 +653,17 @@ class RayLifetimeProcessor(LifetimeProcessor):
         results = {k: v for k, v in zip(futures.keys(), ray.get(list(futures.values())))}
         for k, v in results.items():
             if not v:
-                logger.error(f'Streamer [{k}] failed to start')
-                raise Exception(f'Streamer [{k}] failed to start')
+                logger.error(f"Streamer [{k}] failed to start")
+                raise Exception(f"Streamer [{k}] failed to start")
             else:
-                logger.info(f'Streamer [{k}]=[{v}] started')
+                logger.info(f"Streamer [{k}]=[{v}] started")
         # assert st.is_monitoring, f'Streamer [{st}] failed to start!'
 
         logger.info(f"Started monitoring {len(self.streamers)} streamers: {self.streamers.keys()}")
 
     def get_current_tag(self):
-        acc.await_next_event('MCR-MT:EVR1:DAQClkCntM')
-        tcycle, ncycle = acc.get_latest_buffer_value('MCR-MT:EVR1:DAQClkCntM')
+        acc.await_next_event("MCR-MT:EVR1:DAQClkCntM")
+        tcycle, ncycle = acc.get_latest_buffer_value("MCR-MT:EVR1:DAQClkCntM")
         return (int(tcycle), int((tcycle - int(tcycle)) * 1e1) * 100)
 
 
@@ -655,12 +711,12 @@ class FakeLifetimeProcessor(LifetimeProcessor):
                     self.n_agg += 1
                     tgoal += self.polling_period
                     time.sleep(tleft)
-                except Exception as ex:
+                except Exception:
                     logger.exception("Exception in aggregator thread", exc_info=True, stack_info=True)
 
-        self.agg_thread = threading.Thread(target=f, name='aggregator_thread', daemon=True)
+        self.agg_thread = threading.Thread(target=f, name="aggregator_thread", daemon=True)
         self.agg_thread.start()
-        self.ldebug(f"Started aggregator thread")
+        self.ldebug("Started aggregator thread")
         return self.agg_thread
 
 
@@ -669,4 +725,5 @@ class FakeRayLifetimeProcessor(FakeLifetimeProcessor, RayLifetimeProcessor):
 
     def get_streamer_tags(self, st_name):
         import ray
+
         return ray.wait(self.streamers[st_name].get_available_tags.remote())

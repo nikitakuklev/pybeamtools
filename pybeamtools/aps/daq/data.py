@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 class StreamerCallbackData(BaseModel):
     """Data from the APS DAQ system."""
+
     success: bool
     tag: Optional[float]
     data: dict[str, dict[str, Any]]
@@ -12,6 +13,7 @@ class StreamerCallbackData(BaseModel):
 
 class PerformanceData(BaseModel):
     """Performance data from the APS DAQ system."""
+
     cb_thread_id: int
     cb_process_id: int
     event_rate: float
