@@ -32,9 +32,10 @@ if __name__ == "__main__":
         print(f'No IP address found, using defaults')
         ip = '0.0.0.0'
         bcastip = '255.255.255.255'
-        interfaces = [ip, bcastip]
+        interfaces = [ip, '127.0.0.1']
     else:
-        interfaces = [ip, bcastip, '127.0.0.1']
+        # don't bind unicast
+        interfaces = [bcastip, '127.0.0.1']
 
     # permanent mapping, others will be added by clients
     pvdb = {'AOP:IOC:TEST1': ('127.0.0.2', 12345, -1.0)}
