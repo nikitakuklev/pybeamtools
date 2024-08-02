@@ -2,6 +2,8 @@ import asyncio
 import functools
 import logging
 import multiprocessing
+import os
+import signal
 import time
 from asyncio import AbstractEventLoop
 from threading import Thread
@@ -12,7 +14,7 @@ import nest_asyncio
 import numpy as np
 from caproto import ChannelNumeric, ChannelType, SkipWrite
 from caproto._data import _read_only_property
-from caproto.asyncio.server import Context, run
+from caproto.asyncio.server import AsyncioAsyncLayer, Context, run
 from caproto.server import SubGroup, pvproperty, PvpropertyDouble, PVSpec
 from caproto.server.typing import AsyncLibraryLayer, T_contra
 
@@ -38,13 +40,47 @@ class SimController:
         return self.eval_fn(name)
 
 
+class AsyncioQueue:
+    def __init__(
+            self,
+            loop,
+            maxsize=0,
+    ):
+        self._queue = asyncio.Queue(maxsize)
+        self._loop = loop
+
+    async def async_get(self):
+        #logger.debug(f"Getting from queue {self=}")
+        r = await self._queue.get()
+        #logger.debug(f"Got {r} from queue {self=}")
+        return r
+
+    async def async_put(self, value):
+        return await self._queue.put(value)
+
+    def get(self):
+        future = asyncio.run_coroutine_threadsafe(self._queue.get(), self._loop)
+        return future.result()
+
+    def put(self, value):
+        #logger.debug(f"Putting {value} to queue {self=}")
+        future = asyncio.run_coroutine_threadsafe(self._queue.put(value), self._loop)
+        #logger.debug(f"Put {future} to queue {self=}")
+        return future.result()
+        # return self._loop.call_soon_threadsafe(self._queue.put_nowait, value)
+
+
 class SoftIOC:
     def __init__(self, interfaces=None, debug=False):
         self.pvdb = None
         self.stop_requested = False
         self.thread_started = False
-        self.t = None
+        self.ctx = None
+        self.port = None
+        self.background_thread = None
         self.thread_data = None
+        self.loop = None
+        self.extra_coro_queue = None
         interfaces = interfaces or ["127.0.0.1"]
         self.interfaces = interfaces
 
@@ -62,17 +98,31 @@ class SoftIOC:
         run(self.pvdb, log_pv_names=True, interfaces=self.interfaces)
 
     def run_in_background(self, daemon=True):
-        async def startup_hook(async_lib):
-            logger.info("SoftIOC: starting startup hook for stop monitoring")
+        async def task_starter(async_lib):
+            logger.debug(f"Starting extra coro task loop")
             while True:
+                coro = await self.extra_coro_queue.async_get()
+                logger.debug(f"Starting extra coro [{coro}]")
+                await asyncio.create_task(coro(async_lib))
+
+        async def startup_hook(async_lib):
+            logger.debug("SoftIOC: starting startup hook for stop monitoring")
+            self.port = self.ctx.port
+            await asyncio.create_task(task_starter(async_lib))
+            while True:
+                # coro = await self.extra_coro_queue.async_get()
+                # logger.info(f"Starting extra coro [{coro}]")
+                # await asyncio.create_task(coro(async_lib))
+
                 if self.stop_requested:
-                    logger.info("SoftIOC: hook detected stop request, exiting")
+                    logger.warning("SoftIOC: hook detected stop request, exiting")
                     raise asyncio.CancelledError
-                await async_lib.library.sleep(0.1)
+                await async_lib.library.sleep(0.01)
 
         def start_background_loop(loop: asyncio.AbstractEventLoop) -> None:
             self.thread_started = True
             self.loop = loop = asyncio.new_event_loop()
+            #async_lib = AsyncioAsyncLayer()
             loop.set_debug(True)
             asyncio.set_event_loop(loop)
             logger.info(f"Starting soft ioc in loop [{loop}]")
@@ -80,25 +130,29 @@ class SoftIOC:
             async def start_server(pvdb, *, interfaces=None, log_pv_names=False,
                                    startup_hook=None
                                    ):
-                '''Start an asyncio server with a given PV database'''
-                ctx = Context(pvdb, interfaces)
+                """Start an asyncio server with a given PV database"""
+                self.ctx = ctx = Context(pvdb, interfaces)
                 self.thread_data = ctx
+                self.extra_coro_queue = AsyncioQueue(loop)
+                #asyncio.create_task(task_starter())
+                logger.debug(f'Entering context run loop')
                 return await ctx.run(log_pv_names=log_pv_names, startup_hook=startup_hook)
 
-            asyncio.run(
-                    start_server(
+            coro = start_server(
                             self.pvdb,
                             interfaces=self.interfaces,
                             log_pv_names=True,
                             startup_hook=startup_hook,
                     )
-            )
+            #asyncio.ensure_future(coro, loop=loop)
+            #loop.create_task(coro)
+            loop.run_until_complete(coro)
             logger.info(f"Server run method exited")
             self.thread_started = self.stop_requested = False
 
         t = Thread(daemon=daemon, target=start_background_loop, args=(None,))
         logger.info(f"Starting SoftIOC in thread [{t}]")
-        self.t = t
+        self.background_thread = t
         t.start()
         return t
 
@@ -113,8 +167,8 @@ class SoftIOC:
         raise Exception(f"SoftIOC: thread stop failed")
 
     def join(self):
-        if self.t is not None:
-            self.t.join()
+        if self.background_thread is not None:
+            self.background_thread.join()
         else:
             raise Exception("No thread to join")
 
@@ -529,30 +583,6 @@ class TestIOC:
         t.start()
 
 
-class AsyncioQueue:
-    def __init__(
-            self,
-            loop,
-            maxsize=0,
-    ):
-        self._queue = asyncio.Queue(maxsize)
-        self._loop = loop
-
-    async def async_get(self):
-        return await self._queue.get()
-
-    async def async_put(self, value):
-        return await self._queue.put(value)
-
-    def get(self):
-        future = asyncio.run_coroutine_threadsafe(self._queue.get(), self._loop)
-
-        return future.result()
-
-    def put(self, value):
-        asyncio.run_coroutine_threadsafe(self._queue.put(value), self._loop)
-
-
 class EchoIOC(SoftIOC):
     """Soft IOC that mirror SE values"""
 
@@ -844,7 +874,7 @@ class DynamicIOC(SoftIOC):
         logger.info(f"Setting up dynamic IOC with channels {channels}")
         self.pvspecs: list[PVSpec] = []
         self.queues = {}
-        self.getter = self.putter = self.push_updater = None
+        # self.getter = self.putter = self.push_updater = None
         self.pvdb = {}
         self.getter, self.putter, self.push_updater = self.get_funcs()
 
@@ -884,11 +914,11 @@ class DynamicIOC(SoftIOC):
                 # raise
             return None
 
-        async def async_updater(instance: PvpropertyDouble,
-                                async_lib: AsyncLibraryLayer,
-                                *args,
-                                channel: str, q
-                                ):
+        async def push_updater(instance: PvpropertyDouble,
+                               async_lib: AsyncLibraryLayer,
+                               *args,
+                               channel: str, q
+                               ):
             logger.info(f"SoftIOC updater for {channel=} starting")
             try:
                 async_q = AsyncioQueue(asyncio.get_running_loop())
@@ -899,13 +929,14 @@ class DynamicIOC(SoftIOC):
                     # logger.info(f'SoftIOC updater for {channel=} starting 2')
                     data = await async_q.async_get()
                     logger.debug(f"SoftIOC updater for {channel=} received {data=}")
+                    self.data[channel] = data
                     await instance.write(data, verify_value=False)
             except Exception as ex:
                 logger.error(f"SoftIOC {channel=} exception {ex}")
             finally:
                 logger.warning(f"Updater for {channel=} is exiting")
 
-        return ai_getter, ai_putter, async_updater
+        return ai_getter, ai_putter, push_updater
 
     def send_updates(self, channel: str, data: float):
         assert isinstance(data, float)
@@ -928,6 +959,7 @@ class DynamicIOC(SoftIOC):
 
         assert isinstance(value, float), f"Invalid value {value} for {channel}"
         self.data[channel] = value
+        startup_fun = functools.partial(self.push_updater, channel=channel, q=self)
         prop = pvproperty(
                 record="ai",
                 doc=f"echo_{channel}",
@@ -936,11 +968,22 @@ class DynamicIOC(SoftIOC):
                 dtype=PvpropertyDouble,
                 get=functools.partial(self.getter, channel=channel),
                 put=functools.partial(self.putter, channel=channel),
-                startup=functools.partial(self.push_updater, channel=channel, q=self),
+                startup=startup_fun,
                 precision=6
         )
-        self.pvdb[prop.pvspec.name] = prop.pvspec.create(group=None)
+        self.pvdb[prop.pvspec.name] = spec = prop.pvspec.create(group=None)
         self.channels.append(channel)
+
+        # MEGA HACK TO ADD NEW STARTUP METHOD TO RUNNING TASKS
+        if self.background_thread is not None:
+            logger.debug(f"Adding channel {channel} to coro startup requests as late addition")
+            assert self.extra_coro_queue is not None
+            self.extra_coro_queue.put(spec.server_startup)
+        # while channel not in self.queues:
+        #    time.sleep(0.5)
+        #import faulthandler, signal
+        #faulthandler.enable()
+        #signal.raise_signal(signal.SIGABRT)
         logger.debug(f"Added channel {channel}")
 
 
