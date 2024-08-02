@@ -1,7 +1,10 @@
 import logging
+import time
 
 import caproto.threading.client
 import numpy as np
+
+from pybeamtools.controlsdirect import Accelerator
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +78,134 @@ class LifetimeMeasurer:
 
         return False
 
-# class EPICSLifetimeMeasurement:
+
+class LifetimeMeasureAdaptive:
+    def __init__(self,
+                 channel_current='APSU:MMPS2:DCCT1:beamC-Calc',
+                 channel_coupling='S:VID1:filteredCoupling',
+                 max_time: float = 25.0,
+                 min_time: float = 10.0,
+                 min_current_change: float = 0.0002,
+                 max_current_change: float = 0.0006,
+                 relative_change_mode: bool = True,
+                 normalized_current: bool = True,
+                 normalized_coupling: bool = False,
+                 normalized_power: float = 2 / 3,
+                 current_ref: float = 25.0
+                 ):
+        self.channel = channel_current
+        self.channel_coupling = channel_coupling
+        self.data = {}
+        self.pvs = {}
+        self.subs = {}
+        self.acc = Accelerator.get_singleton()
+
+        assert max_time > min_time
+        assert max_current_change > min_current_change
+
+        self.max_time = max_time
+        self.min_time = min_time
+        self.min_current_change = min_current_change
+        self.max_current_change = max_current_change
+        self.relative_change_mode = relative_change_mode
+        self.normalized_current = normalized_current
+        self.normalized_coupling = normalized_coupling
+        self.normalized_power = normalized_power
+        self.current_ref = current_ref
+
+    def setup_data_collection(self):
+        """ Set up EPICS monitoring for pv"""
+        self.acc.ensure_monitored(self.channel)
+        if self.normalized_coupling:
+            self.acc.ensure_monitored(self.channel_coupling)
+
+    def get_pv_data(self, pv, t1, t2=None):
+        t2 = t2 or time.time()
+        times, current_data = self.acc.get_buffer_data_slice(self.channel, start=t1, end=t2, store_local_time=True)
+        return times, current_data
+
+    def measure(self):
+        t_start = time.time()
+        delta = lambda: time.time() - t_start
+
+        self.setup_data_collection()
+
+        while True:
+            if delta() < self.min_time:
+                time.sleep(0.1)
+                continue
+
+            if delta() > self.max_time:
+                logger.debug(f'Stopping in {delta():.2f}s due to exceeding max time')
+                break
+
+            times, current_data = self.get_pv_data(self.channel, t_start)
+            assert len(current_data) > 0
+
+            if len(current_data) == 1:
+                time.sleep(0.1)
+                continue
+
+            if self.relative_change_mode:
+                threshold = current_data[0] * (1 - self.max_current_change)
+            else:
+                threshold = current_data[0] - self.max_current_change
+            if current_data[-1] < threshold:
+                logger.debug(f'Stopping in {delta():.2f}s due to exceeding current loss {current_data[0] - threshold}')
+                break
+
+        t_elapsed = delta()
+
+        # N = N0*exp(-lambda*t)
+        # ln(N) = -lambda*t + ln(N0)
+        # y = a*t+b
+        # lifetime = 1/lambda = 1/-slope
+        # normlifetime = lifetime * (current^2/3 / ref_current^2/3) * (1/sqrt(couplingratio))
+        times, current_data = self.get_pv_data(self.channel, t_start)
+        logger.debug(f'Got {len(current_data)} current points in {t_elapsed:.2f}s')
+
+        if len(current_data) < 2:
+            raise ValueError(f'Error - not enough current datapoints')
+        assert np.all(current_data > 0)
+        avg_current = current_data.mean()
+        logger.debug(f'Average current is %.3f', avg_current)
+
+        if self.relative_change_mode:
+            threshold = current_data[0] * (1 - self.min_current_change)
+        else:
+            threshold = current_data[0] - self.min_current_change
+        if current_data[-1] > threshold:
+            raise ValueError(f'Error - too small current change {current_data[0]} -> {current_data[-1]}')
+
+        lncurrent = np.log(current_data)
+        z = np.polyfit(times, lncurrent, 1, cov=False)  # cov
+        # stdev = np.sqrt(np.diag(cov))
+        slope = z[0]
+
+        lifetime = -1 / slope / 3600
+        # z2 = np.polyfit(times, current_data, 1)
+        # logger.debug(f'Unnormalized lifetime is %.3f h (linear lifetime %.3f)', lifetime, -avg_current/z2[0]/3600)
+        logger.debug(f'Unnormalized lifetime is %.3fh', lifetime)
+
+        normalized_lifetime = lifetime
+        if self.normalized_coupling:
+            times2, coupling_data = self.get_pv_data(self.channel_coupling, t_start)
+            if len(coupling_data) < 2:
+                raise ValueError(f'Error - not enough coupling datapoints')
+            logger.debug(f'Got {len(coupling_data)} coupling points in {t_elapsed:.2f}s')
+            avg_coupling = coupling_data.mean()
+            logger.debug(f'Average coupling is {avg_coupling:.3f}')
+            normalized_lifetime = normalized_lifetime * np.sqrt(1.0) / np.sqrt(avg_coupling)
+            logger.debug(f'Normalized coupling lifetime is {normalized_lifetime:.3f}h')
+
+        if self.normalized_current:
+            logger.debug(f'Normalizing by current ^ {self.normalized_power:.3f} to {self.current_ref:.3f}mA')
+            normalized_lifetime = normalized_lifetime * (avg_current / self.current_ref) ** self.normalized_power
+            logger.debug(f'Normalized current lifetime is {normalized_lifetime:.3f}h')
+
+        return lifetime, normalized_lifetime
+
+        # class EPICSLifetimeMeasurement:
 # """
 # Script to get lifetime based on loss threshold
 # """
