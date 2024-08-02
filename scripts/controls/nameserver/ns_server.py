@@ -40,6 +40,6 @@ if __name__ == "__main__":
     pvdb = {'AOP:IOC:TEST1': ('127.0.0.2', 12345, -1.0)}
 
     try:
-        start_nameserver_loop(pvdb=pvdb, epics_interfaces=interfaces)
+        start_nameserver_loop(pvdb=pvdb, epics_interfaces=interfaces, api_host='127.0.0.1')
     except KeyboardInterrupt:
         print(f'Stopping due to keyboard interrupt')
