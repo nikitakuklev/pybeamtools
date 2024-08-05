@@ -1,3 +1,4 @@
+import faulthandler
 import logging
 import os
 import signal
@@ -6,9 +7,8 @@ import sys
 import threading
 import time
 from queue import Queue
-import faulthandler
 
-from pybeamtools.aps.daq.streamer import EPICSStreamer, LifetimeCallback, ScalarLifetimeCallback
+from pybeamtools.aps.daq.streamer import EPICSStreamer, ScalarLifetimeCallback
 from pybeamtools.controlsdirect.clib import Accelerator
 from pybeamtools.sim.softioc import DynamicIOC
 from pybeamtools.utils.logging import config_root_logging

@@ -1378,10 +1378,13 @@ class ScalarLifetimeCallback(LifetimeCallback):
                 if values is not None:
                     if values.ndim != 1:
                         raise ValueError(f'Expected 1D array, got {values=}')
+                    values = values.clip(1e-6, None)
                     values = values[:, None]
                     lts = compute_lifetime_exponential_v2(times, values)
                     assert len(lts) == 1, f'BAD LIFETIME {lts=} {values.shape=} {times.shape=} {tags=}'
                     individual = lts[0]
+                    if not np.isfinite(individual):
+                        individual = 0.0
                     updates[metric] = {
                         "timestamp": time.time(),
                         "raw": individual,
