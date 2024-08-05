@@ -165,13 +165,13 @@ class DefaultContext:
                                       f'{rec_field}')
 
         # Verify the modifiers are usable BEFORE caching rec_field in the pvdb:
-        if ca.RecordModifiers.long_string in (mods or {}):
-            if inst.data_type not in (ChannelType.STRING,
-                                      ChannelType.CHAR):
-                raise CaprotoKeyError(
-                        f'Long-string modifier not supported with types '
-                        f'other than string or char ({inst.data_type})'
-                )
+        # if ca.RecordModifiers.long_string in (mods or {}):
+        #     if inst.data_type not in (ChannelType.STRING,
+        #                               ChannelType.CHAR):
+        #         raise CaprotoKeyError(
+        #                 f'Long-string modifier not supported with types '
+        #                 f'other than string or char ({inst.data_type})'
+        #         )
 
         # Cache record.FIELD for later usage
         self.pvdb[rec_field] = inst
@@ -189,15 +189,25 @@ class DefaultContext:
                 version_requested = True
             elif isinstance(command, ca.SearchRequest):
                 pv_name = command.name
+                if not pv_name.startswith('AOP:'):
+                    continue
                 try:
-                    known_pv = self[pv_name] is not None
+                    known_pv = self[pv_name]
                 except KeyError:
-                    known_pv = False
+                    known_pv = None
+                    (rec_field, rec, field, mods) = ca.parse_record_field(pv_name)
+                    if rec in self.pvdb:
+                        known_pv = self.pvdb[rec]
+                        self.log.info(f'SearchRequest for %s - FOUND FALLBACK', pv_name)
+                        self.log.info(f'Parse {(rec_field, rec, field, mods)}')
+                    else:
+                        self.log.info(f'SearchRequest for %s - NOT FOUND', pv_name)
+                        self.log.info(f'Parse {(rec_field, rec, field, mods)}')
 
-                if known_pv:
+                if known_pv is not None:
                     # responding with an IP of `None` tells client to get IP
                     # address from the datagram.
-                    pv_addr, pv_port, timeout = self[pv_name]#self.pvdb[pv_name]
+                    pv_addr, pv_port, timeout = known_pv #self.pvdb[pv_name]
                     # if negative timeout, it is a permanent mapping
                     if 0 < timeout < time.time():
                         self.log.debug('SearchRequest for %s - ENTRY TOO OLD', pv_name)
