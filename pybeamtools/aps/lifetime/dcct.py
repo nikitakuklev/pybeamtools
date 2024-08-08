@@ -24,7 +24,8 @@ class DCCTLifetimeProcessor:
                  interfaces: list[str] = None,
                  reset_logging: bool = True,
                  verbosity=logging.WARNING,
-                 ioc_verbosity=logging.WARNING
+                 ioc_verbosity=logging.WARNING,
+                 streamer_kwargs: dict = None,
                  ):
 
         if reset_logging:
@@ -42,13 +43,14 @@ class DCCTLifetimeProcessor:
         self.verbosity = verbosity
         self.ioc_verbosity = ioc_verbosity
         self.debug = verbosity <= logging.DEBUG
+        self.streamer_kwargs = streamer_kwargs or {}
         self.streamers = {}
         self.ioc_channels = []
         self.n_agg = 0
 
         pvdb = {}
         for name, ch in self.channel_map.items():
-            for metric in lifetime_processors.keys():
+            for metric in lifetime_processors[name].keys():
                 channel_name = publish_format.format(x=name, metric=metric)
                 pvdb[channel_name] = 0.0
                 self.ioc_channels.append(channel_name)
@@ -85,7 +87,7 @@ class DCCTLifetimeProcessor:
 
     def setup_lifetime_cbs(self):
         for s, v in self.streamers.items():
-            ltcb = ScalarLifetimeCallback(self.lifetime_processors, self.debug)
+            ltcb = ScalarLifetimeCallback(self.lifetime_processors[s], self.debug, **self.streamer_kwargs)
             v.clear_callbacks()
             v.add_callback("lifetime", ltcb, f_kwargs=dict(st_name=s))
 

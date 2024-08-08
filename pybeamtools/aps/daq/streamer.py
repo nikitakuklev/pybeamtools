@@ -1308,7 +1308,12 @@ class RayStreamerWrapper:
 
 
 class LifetimeCallback:
-    def __init__(self, lifetime_processors, debug=False):
+    def __init__(self, lifetime_processors,
+                 lower_limit: float = None,
+                 upper_limit: float = None,
+                 reinjection_threshold: float = None,
+                 debug=False,
+                 ):
         self.results = {}
         for k, v in lifetime_processors.items():
             self.results[k] = collections.deque(maxlen=100)
@@ -1319,6 +1324,9 @@ class LifetimeCallback:
         self.debug = debug
         self.logger = logging.getLogger(__name__)
         self.log_with_print = False
+        self.lower_limit = lower_limit
+        self.upper_limit = upper_limit
+        self.reinjection_threshold = reinjection_threshold
 
     def ldebug(self, msg):
         if self.debug:
@@ -1343,8 +1351,14 @@ class LifetimeCallback:
                     lts = compute_lifetime_exponential_v2(times, mat)
                     # df = pd.DataFrame(lts[None, :], columns=streamer.keys, index=[time.time()])
                     # self.results[k][sector].append(df)
-                    individual = {streamer.keys[i]: lts[i] for i in range(len(streamer.keys))}
+                    individual_raw = {streamer.keys[i]: lts[i] for i in range(len(streamer.keys))}
                     # median_lt = np.median(lts)
+                    individual = {}
+                    if self.lower_limit is not None:
+                        for k, v in individual_raw.items():
+                            individual[k] = max(v, self.lower_limit)
+                    else:
+                        individual = individual_raw
                     updates[metric] = {
                         "timestamp": time.time(),
                         "raw": individual,
@@ -1385,6 +1399,8 @@ class ScalarLifetimeCallback(LifetimeCallback):
                     individual = lts[0]
                     if not np.isfinite(individual):
                         individual = 0.0
+                    if self.lower_limit is not None:
+                        individual = max(individual, self.lower_limit)
                     updates[metric] = {
                         "timestamp": time.time(),
                         "raw": individual,

@@ -251,6 +251,8 @@ class LifetimeProcessor(DAQProcessor, ABC):
         verbosity: int = logging.INFO,
         ioc_verbosity: int = logging.WARNING,
         streamer_kwargs: dict = None,
+        lower_limit: float = -0.1,
+        upper_limit: float = 20,
     ):
         super().__init__(
             channel_format=channel_format,
@@ -287,6 +289,8 @@ class LifetimeProcessor(DAQProcessor, ABC):
                 }
         self.trigger_params = trigger_params
         self.publish_format = publish_format
+        self.lower_limit = lower_limit
+        self.upper_limit = upper_limit
         self.n_agg = 0
         self.last_agg = None
         self.is_agg_running = False
@@ -316,7 +320,8 @@ class LifetimeProcessor(DAQProcessor, ABC):
     def setup_streamers(self):
         super().setup_streamers()
         for s, v in self.streamers.items():
-            ltcb = LifetimeCallback(self.lifetime_processors, self.debug)
+            ltcb = LifetimeCallback(self.lifetime_processors,
+                                    lower_limit=self.lower_limit, upper_limit=self.upper_limit, debug=self.debug)
             v.clear_callbacks()
             # v.add_callback(functools.partial(timing_callback, k=k))
             v.add_callback("lifetime", ltcb, f_kwargs=dict(st_name=s))
@@ -583,7 +588,7 @@ class RayLifetimeProcessor(LifetimeProcessor):
                 c_formatted = self.channel_format.format(s=f"{s:02d}")
                 st_key = f"st_{s:02d}"
                 st = RayStreamerWrapper(
-                    self.STREAMER_CLASS,
+                    ray_class=self.STREAMER_CLASS,
                     name=st_key,
                     sector=s,
                     channel=c_formatted,
@@ -602,7 +607,10 @@ class RayLifetimeProcessor(LifetimeProcessor):
             futures[st_name] = st.connect.remote()
 
         for st_name, st in self.streamers.items():
-            ltcb = LifetimeCallback(self.lifetime_processors, self.debug)
+            ltcb = LifetimeCallback(self.lifetime_processors,
+                                    lower_limit=self.lower_limit,
+                                    upper_limit=self.upper_limit,
+                                    debug=self.debug)
             st.clear_callbacks.remote()
             r = st.add_callback.remote("lifetime", ltcb, f_kwargs=dict(st_name=st_name))
             ray.get(r)
