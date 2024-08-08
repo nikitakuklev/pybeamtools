@@ -2,7 +2,7 @@ import asyncio
 import functools
 import logging
 import time
-from typing import Literal, Optional, TYPE_CHECKING
+from typing import Callable, Literal, Optional, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -184,6 +184,7 @@ class Accelerator:
         self.cnts = {}
         self.callbacks = {}
         self.subs = {}
+        self.subs_custom = {}
         self.cbobj = CB
         CB.acc = self
         self.busytime = 0.0
@@ -218,6 +219,32 @@ class Accelerator:
             cbf = self.cbobj.process
             pv.subscribe('blabla', cbf)
             pv.startMonitor()
+
+    def subscribe_custom(self, pvname: str, f: Callable, backend='caproto'):
+        if backend == 'caproto':
+            pv = self.kv.get(pvname)
+            sub = pv.subscribe(data_type="time")
+            token = sub.add_callback(f)
+            if pvname not in self.subs_custom:
+                self.subs_custom[pvname] = []
+            self.subs_custom[pvname].append((token,f))
+        elif backend == 'pvapy':
+            raise NotImplementedError("pvapy not implemented")
+
+    def unsubscribe_custom(self, pvname: str, f: Callable, backend='caproto'):
+        if backend == 'caproto':
+            pv = self.kv.get(pvname)
+
+            if pvname not in self.subs_custom:
+                self.subs_custom[pvname] = []
+            s = self.subs_custom[pvname]
+            for tup in s:
+                if tup[1] == f:
+                    sub = pv.subscribe(data_type="time")
+                    sub.remove_callback(tup[0])
+                    s.remove(tup)
+        elif backend == 'pvapy':
+            raise NotImplementedError("pvapy not implemented")
 
     def ensure_connection(self, pvs: list["PV"], timeout=2):
         if not isinstance(pvs, list):
@@ -456,7 +483,11 @@ class Accelerator:
         from caproto.threading.client import Batch
         if isinstance(names, str):
             names = [names]
-        assert isinstance(names, list)
+        if not isinstance(names, list):
+            try:
+                names = list(names)
+            except TypeError:
+                raise ValueError(f'{names} is not iterable')
         names = list(set(names))
         results = {}
 
@@ -488,6 +519,8 @@ class Accelerator:
                     r2[k] = v[0]
             return r2
         return results
+
+    read_all = read_all_now
 
     def read_fresh(
             self,
@@ -722,7 +755,7 @@ class Accelerator:
         return value_dict
 
     def write(self, data: dict, timeout: float = 1.0):
-        logger.debug(f"WR: start {data=}")
+        #logger.debug(f"WR: start {data=}")
         for pvn in data:
             pv_input = self.kv[pvn]
             self.ensure_connection([pv_input])
