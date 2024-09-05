@@ -45,7 +45,8 @@ def compute_lifetime_exponential(times, current_data, offset=0.0, normalized=Fal
 
 
 def compute_lifetime_exponential_v2(times: np.ndarray, mat: np.ndarray,
-                                    offset=None, clip_min: float = 1.0) -> np.ndarray:
+                                    offset=None, clip_min: float = 1.0
+                                    ) -> np.ndarray:
     if clip_min is not None:
         mat.clip(clip_min, None, out=mat)
     if offset is not None:
@@ -55,6 +56,18 @@ def compute_lifetime_exponential_v2(times: np.ndarray, mat: np.ndarray,
     slopes = z[1, :]
     lifetimes = -1 / slopes / 3600
     return lifetimes
+
+
+def lifetime_linear_fit(times: np.ndarray, mat: np.ndarray,
+                        offset=None, clip_min: float = 1.0
+                        ) -> np.ndarray:
+    if clip_min is not None:
+        mat.clip(clip_min, None, out=mat)
+    if offset is not None:
+        mat += offset[None, :]
+    lncurrent = np.log(mat)
+    z = np.polynomial.polynomial.polyfit(times, lncurrent, 1)
+    return z
 
 
 class LifetimeMeasurer:
@@ -203,7 +216,7 @@ class LifetimeMeasureAdaptive:
             normalized_lifetime = normalized_lifetime * (avg_current / self.current_ref) ** self.normalized_power
             logger.debug(f'Normalized current lifetime is {normalized_lifetime:.3f}h')
 
-        return lifetime, normalized_lifetime
+        return lifetime, normalized_lifetime, np.mean(current_data)
 
         # class EPICSLifetimeMeasurement:
 # """

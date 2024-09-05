@@ -14,195 +14,16 @@ from caproto.threading.client import PV
 import numba
 import numpy as np
 
-from pybeamtools.aps.daq.data import FakePvObject, PerformanceData
+from pybeamtools.aps.daq.data import FakePvObject, PerformanceData, get_bpm_channel_properties, \
+    post_process_daq_object_via_paths
 from pybeamtools.controls.ray import RayMixin
 from pybeamtools.controlsdirect.clib import Accelerator
 from pybeamtools.utils.logging import config_root_logging
 
-
-def get_bpm_fields(c) -> list[str]:
-    struct = c.getIntrospectionDict()
-    found_fields = [x for x in struct.keys() if is_bpm_field(x)]
-    return found_fields
-
-
-def is_bpm_field(x):
-    return x[0] == "s" and len(x) == 6
-
-
-WINDOW = 2048 // 2
-STEP = 1024 // 2
-DAQ_DOWNSAMPLE_FACTOR = 32
 TRACE = False
 
 
-def get_bpm_channel_properties(c, devices, fields: list[str], time_field="time", extra_fields=None):
-    if devices is None:
-        bpms = get_bpm_fields(c)
-    else:
-        bpms = devices
-    fl = []
-    fp = {}
-    for field in fields:
-        fl.extend([f"{x}.{field}" for x in bpms])
-        fp[field] = [(x, field) for x in bpms]
-    if time_field is not None:
-        fl.insert(0, "time")
-    if extra_fields is not None:
-        fl.extend(extra_fields)
-    fstr = ", ".join(fl)
-    return fp, f"field({fstr})"
 
-
-def get_ps_channel_properties(c, fields: list[str], add_time=True):
-    bpms = get_bpm_fields(c)
-    fl = []
-    fp = {}
-    for field in fields:
-        fl.extend([f"{x}.{field}" for x in bpms])
-        fp[field] = [(x, field) for x in bpms]
-    if add_time:
-        fl.insert(0, "time")
-    fstr = ", ".join(fields)
-    return fp, f"field({fstr})"
-
-
-# def post_process_daqtbt_object(data: dict,
-#                                fields: list[str],
-#                                ignore_errors=True,
-#                                time_field='time',
-#                                debug=False,
-#                                expected_frame_len=None
-#                                ):
-#     arrays = {field: [] for field in fields}
-#     bpms = []
-#     time_array = None
-#     datafields = list(data.keys())
-#     if debug:
-#         print(f'PVO processing | Have {len(datafields)} channels, will search for {fields=}')
-#     for bpm in datafields:
-#         if bpm == time_field:
-#             time_array = data[time_field].copy()
-#         elif is_bpm_field(bpm):
-#             for field in fields:
-#                 arr = data[bpm][field]
-#                 if expected_frame_len is not None and len(arr) != EXPECTED_TBT_FRAME_LEN:
-#                     print(f'Bad length {len(arr)}')
-#                     if not ignore_errors:
-#                         raise Exception(f'Bad length {len(arr)}, expected {EXPECTED_TBT_FRAME_LEN}')
-#                 if len(arr) > 0:
-#                     if debug:
-#                         print(f'Found {field} {bpm}')
-#                     arrays[field].append(arr)
-#                     bpms.append(bpm)
-#                 else:
-#                     if not ignore_errors:
-#                         print(f'Bad bpm {bpm}')
-#         else:
-#             if debug:
-#                 print(f'Skipping field {bpm=}')
-#             pass
-#
-#     if time_array is None:
-#         raise Exception('Missing time field')
-#
-#     final_matrices = []
-#     for field in fields:
-#         if len(arrays[field]) == 0:
-#             final_matrices.append(None)
-#             continue
-#
-#         # convert to float due to possible overflow for int32
-#         # float32 is also faster and has enough precision
-#         # np.nextafter(59852530.0, 59852530.0+1) = 59852528.00000001
-#         if (s := set([len(x) for x in arrays[field]])) != {len(arrays[field][0])}:
-#             print(f'Have nonuniform lengths {s}')
-#         mat = np.row_stack(arrays[field]).astype(np.float32).T  # this now has F order for column-wise mean
-#         assert mat.flags['F_CONTIGUOUS']
-#         # mat = np.column_stack(arrays).astype(np.float64)
-#         # assert mat.flags['C_CONTIGUOUS']# and mat.flags['OWNDATA']
-#
-#         del arrays[field]
-#         final_matrices.append(mat)
-#
-#     bpm_names = [SR_BPMS_DAQ_TO_NAME[x] for x in bpms]
-#     assert time_array.flags['C_CONTIGUOUS'] and time_array.flags['OWNDATA']
-#
-#     return final_matrices, time_array, bpm_names
-
-
-def post_process_daq_object_via_paths(
-        data: dict,
-        field_paths: dict[str, list[str]],
-        ignore_errors=True,
-        time_field="time",
-        tag_field="acqClkTimestamp",
-        frame_len: int = None,
-        debug=False,
-        # tag_function: Optional[Callable] = None,
-) -> tuple[list[np.ndarray], np.ndarray, list[str], tuple[int, int]]:
-    """Process the data dictionary from the PV using the field paths to traverse the structure."""
-    arrays = {field: [] for field in field_paths}
-    channels = []
-    datafields = list(data.keys())
-    logger = logging.getLogger(__name__)
-    if debug:
-        logger.debug(f"PVO processing | analyzing {len(datafields)} channels")
-        if TRACE:
-            logger.debug(f"Have {datafields=}, will search for {field_paths=}")
-    for field, path_list in field_paths.items():
-        for fp in path_list:
-            arr = data.get(fp[0], None)
-            if arr is None:
-                raise Exception(f"Bad device path {fp=}, have {data.keys()}")
-            for p in fp[1:]:
-                arr = arr.get(p, None)
-                if arr is None:
-                    raise Exception(f"Bad path {fp=} - no data")
-            larr = len(arr)
-            if frame_len is not None and larr != frame_len:
-                if larr == 0:
-                    pass
-                else:
-                    logger.error(f"Bad length {larr=} vs {frame_len=}")
-                    if not ignore_errors:
-                        raise Exception(f"Bad length {larr}, expected {frame_len}")
-            if larr > 0:
-                if TRACE:
-                    logger.debug(f"Found path {fp=}")
-                arrays[field].append(arr)
-                channels.append(fp[0])
-            else:
-                if not ignore_errors:
-                    raise ValueError(f"Bad channel {fp[0]=}")
-
-    time_array = data[time_field].copy()
-    time_tag = data[tag_field]
-    tag = (time_tag["secondsPastEpoch"], (time_tag["nanoseconds"] // 10000000) * 10)
-
-    final_matrices = []
-    for field in field_paths:
-        if len(arrays[field]) == 0:
-            final_matrices.append(None)
-            continue
-
-        # convert to float due to possible overflow for int32
-        # float32 is also faster and has enough precision
-        # np.nextafter(59852530.0, 59852530.0+1) = 59852528.00000001
-        if (s := set([len(x) for x in arrays[field]])) != {len(arrays[field][0])}:
-            print(f"Have nonuniform lengths {s}")
-        mat = np.row_stack(arrays[field]).astype(np.float32).T  # this now has F order for column-wise mean
-        assert mat.flags["F_CONTIGUOUS"]
-        # mat = np.column_stack(arrays).astype(np.float64)
-        # assert mat.flags['C_CONTIGUOUS']# and mat.flags['OWNDATA']
-
-        del arrays[field]
-        final_matrices.append(mat)
-
-    # bpm_names = [SR_BPMS_DAQ_TO_NAME[x] for x in bpms]
-    assert time_array.flags["C_CONTIGUOUS"] and time_array.flags["OWNDATA"]
-
-    return final_matrices, time_array, channels, tag
 
 
 # Numba will hopefully hardcode the window and step values, ala C++ templates
@@ -410,8 +231,6 @@ class GenericStreamer(ABC):
         with self.buf_lock:
             return np.array([x[0] for x in self.buffer]), np.array([x[1] for x in self.buffer])
 
-
-
     def get_perf_stats2(self):
         return PerformanceData(
                 cb_thread_id=self.event_cb_thread_id,
@@ -470,7 +289,7 @@ class EPICSStreamer(GenericStreamer):
         with self.buf_lock:
             buffers = list(self.buffer)[-n:]
         data, times, tags = (
-            [x[0][0] for x in buffers], #scalar
+            [x[0][0] for x in buffers],  # scalar
             [x[1] for x in buffers],
             [x[2] for x in buffers],
         )
@@ -700,6 +519,8 @@ class DAQStreamer(ABC):
             self.event_cb_result = {"success": False, "cbs": {}}
             self.event_cb_result_buffer.append(self.event_cb_result)
 
+
+
     # gets pvaccess.pvaccess.PvObject
     def __cbinternal(self, x):
         if "acqClkTimestamp" not in x:
@@ -890,9 +711,11 @@ class ArrayStreamer(DAQStreamer, RayMixin, ABC):
             fields=None,
             downsample=True,
             debug=False,
-            ds_window=WINDOW,
-            ds_step=STEP,
+            ds_window=None,
+            ds_step=None,
     ):
+        assert ds_window is not None
+        assert ds_step is not None
         self.fields: list[str] = fields
         self.devices = devices
         self.frame_len = frame_len
@@ -1025,6 +848,8 @@ class TBTStreamer(ArrayStreamer, RayMixin):
     DAQ_TYPE = "tbt"
     EXPECTED_TBT_FS = 352055e3 / 1296
     EXPECTED_TBT_FRAME_LEN = 27120
+    DOWNSAMPLE_WINDOW = 2048 // 2
+    DOWNSAMPLE_STEP = 1024 // 2
 
     def __init__(
             self,
@@ -1037,11 +862,13 @@ class TBTStreamer(ArrayStreamer, RayMixin):
             downsample=True,
             debug=False,
             daq_dec_factor=1,
-            ds_window=WINDOW,
-            ds_step=STEP,
+            ds_window=None,
+            ds_step=None,
     ):
         fields = fields or ["sum"]
         self.sector = sector
+        ds_window = ds_window or self.DOWNSAMPLE_WINDOW
+        ds_step = ds_step or self.DOWNSAMPLE_STEP
         super().__init__(
                 name,
                 channel,
@@ -1071,10 +898,11 @@ class TBTStreamer(ArrayStreamer, RayMixin):
         return post_process_daq_object_via_paths(
                 data,
                 self.fields_paths,
-                debug=self.debug,
                 ignore_errors=ignore_errors,
                 time_field=self.TIME_FIELD,
                 frame_len=self.frame_len,
+                debug=self.debug,
+                trace=TRACE
         )
 
 
@@ -1308,7 +1136,8 @@ class RayStreamerWrapper:
 
 
 class LifetimeCallback:
-    def __init__(self, lifetime_processors,
+    def __init__(self,
+                 lifetime_processors: dict[str, tuple[int, int]],
                  lower_limit: float = None,
                  upper_limit: float = None,
                  reinjection_threshold: float = None,
@@ -1326,7 +1155,7 @@ class LifetimeCallback:
         self.log_with_print = False
         self.lower_limit = lower_limit
         self.upper_limit = upper_limit
-        self.reinjection_threshold = reinjection_threshold
+        self.max_fit_error = reinjection_threshold
 
     def ldebug(self, msg):
         if self.debug:
@@ -1349,6 +1178,8 @@ class LifetimeCallback:
                 mat, times, tags = streamer.get_latest_buffers(avgcnt)
                 if mat is not None:
                     lts = compute_lifetime_exponential_v2(times, mat)
+                    slopes = z[1, :]
+                    lifetimes = -1 / slopes / 3600
                     # df = pd.DataFrame(lts[None, :], columns=streamer.keys, index=[time.time()])
                     # self.results[k][sector].append(df)
                     individual_raw = {streamer.keys[i]: lts[i] for i in range(len(streamer.keys))}
@@ -1359,6 +1190,11 @@ class LifetimeCallback:
                             individual[k] = max(v, self.lower_limit)
                     else:
                         individual = individual_raw
+
+                    if self.upper_limit is not None:
+                        for k, v in individual.items():
+                            individual[k] = min(v, self.upper_limit)
+
                     updates[metric] = {
                         "timestamp": time.time(),
                         "raw": individual,

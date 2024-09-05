@@ -205,9 +205,7 @@ class DefaultContext:
                         self.log.info(f'Parse {(rec_field, rec, field, mods)}')
 
                 if known_pv is not None:
-                    # responding with an IP of `None` tells client to get IP
-                    # address from the datagram.
-                    pv_addr, pv_port, timeout = known_pv #self.pvdb[pv_name]
+                    pv_addr, pv_port, timeout = known_pv
                     # if negative timeout, it is a permanent mapping
                     if 0 < timeout < time.time():
                         self.log.debug('SearchRequest for %s - ENTRY TOO OLD', pv_name)
