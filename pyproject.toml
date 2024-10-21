@@ -36,7 +36,7 @@ requires-python = ">=3.9"
 aatool = "pybeamtools.archiver.aautil:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
 include = ["pybeamtools*"]
 
 [tool.setuptools.package-data]
