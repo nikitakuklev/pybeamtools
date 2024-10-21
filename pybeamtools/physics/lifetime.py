@@ -1,3 +1,4 @@
+import collections
 import logging
 import time
 
@@ -44,13 +45,23 @@ def compute_lifetime_exponential(times, current_data, offset=0.0, normalized=Fal
         print(normalized_lifetime)
 
 
-def compute_lifetime_exponential_v2(times: np.ndarray, mat: np.ndarray,
-                                    offset=None, clip_min: float = 1.0
+def compute_lifetime_exponential_v2(times: np.ndarray,
+                                    mat: np.ndarray,
+                                    offset=None,
+                                    clip_min: float = 1.0,
+                                    inplace=True
                                     ) -> np.ndarray:
+    #logging.warning(f'{(times, mat, offset, clip_min)=}')
     if clip_min is not None:
-        mat.clip(clip_min, None, out=mat)
+        if inplace:
+            mat.clip(clip_min, None, out=mat)
+        else:
+            mat = np.clip(mat, clip_min, None)
     if offset is not None:
-        mat += offset[None, :]
+        if inplace:
+            mat += offset[None, :]
+        else:
+            mat = mat + offset[None, :]
     lncurrent = np.log(mat)
     z = np.polynomial.polynomial.polyfit(times, lncurrent, 1)
     slopes = z[1, :]

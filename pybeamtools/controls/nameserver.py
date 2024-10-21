@@ -300,7 +300,7 @@ class DefaultContext:
 
 class Mapping(BaseModel):
     channel: str
-    address: str #IPv4Address
+    address: str  # IPv4Address
     port: Annotated[int, Field(strict=True, ge=1024, le=65535)]
     timeout: Annotated[float, Field(strict=True, gt=0, le=120)]
 
@@ -340,7 +340,8 @@ class NSServer:
             if not mapping.channel.startswith('AOP:'):
                 raise HTTPException(status_code=403, detail="Channel must start with AOP:")
             updates[mapping.channel] = (mapping.address, mapping.port, time.time() + mapping.timeout)
-            self.logger.info(f"NSSERVER | Update item [{mapping.channel}] [{mapping.address}] [{mapping.port}] [{mapping.timeout}]")
+            self.logger.info(
+                f"NSSERVER | Update item [{mapping.channel}] [{mapping.address}] [{mapping.port}] [{mapping.timeout}]")
         self.ctx.pvdb.update(updates)
         return {"status": 1}
 
@@ -354,6 +355,7 @@ class NSServer:
     async def list_items(self):
         return self.ctx.pvdb
 
+
 class NSClient:
     def __init__(self, nameserver='cadmus.aps4.anl.gov', port=6064):
         self.ns_addr = nameserver
@@ -361,6 +363,12 @@ class NSClient:
         self.s = requests.Session()
         self.s.trust_env = False
         logging.getLogger("requests.packages.urllib3.connectionpool").setLevel(logging.WARNING)
+
+    def ping(self):
+        url = f"http://{self.ns_addr}:{self.ns_port}/openapi.json"
+        r = self.s.get(url)
+        assert r.status_code == 200, f"Error {r.status_code} {r.text} when pinging NS"
+        return r.json()
 
     def publish_channel(self, channel: str, address: str, port: int, timeout: float):
         url = f"http://{self.ns_addr}:{self.ns_port}/ns"
@@ -372,8 +380,9 @@ class NSClient:
 
     def publish_channels(self, channels: list[str], address: str, port: int, timeout: float):
         r = self.s.post(f"http://{self.ns_addr}:{self.ns_port}/ns_bulk",
-                    json={"mappings": [{"channel": c, "address": address, "port": port, "timeout": timeout} for c in
-                                       channels]},
+                        json={"mappings": [{"channel": c, "address": address, "port": port, "timeout": timeout} for c in
+                                           channels]
+                              },
                         timeout=0.2)
         assert r.status_code == 200, f"Error {r.status_code} {r.text} when updating NS"
         assert r.json()['status'] == 1
@@ -391,6 +400,7 @@ class NSClient:
         r = self.s.get(f"http://{self.ns_addr}:{self.ns_port}/list")
         assert r.status_code == 200, f"Error {r.status_code} {r.text} when listing channels"
         return r.json()
+
 
 logger = logging.getLogger(__name__)
 
@@ -455,6 +465,3 @@ def start_nameserver_loop(pvdb, epics_interfaces, api_host='0.0.0.0'):
     asyncio.run(
             start_nameserver(pvdb, epics_interfaces=epics_interfaces, api_host=api_host)
     )
-
-
-

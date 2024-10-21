@@ -2,7 +2,7 @@ import logging
 import queue
 import time
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, validator
 
 from pybeamtools.controls.distributed import ProcessManager
 from pybeamtools.controls.errors import ControlLibException, InterlockTimeoutError, InterlockWriteError, \
@@ -12,7 +12,7 @@ from pybeamtools.controls.interlocks import Interlock, InterlockOptions, LimitIn
 from pybeamtools.controls.network import ConnectionManager, ConnectionOptions, EPICSConnectionManager, \
     SimConnectionManager
 from pybeamtools.controls.pv import PV
-from pybeamtools.utils.logging import config_root_logging
+from pybeamtools.utils.logging import config_root_logging, start_logging_thread
 
 __all__ = ['AcceleratorOptions', 'Accelerator']
 
@@ -38,7 +38,7 @@ class AcceleratorOptions(BaseModel):
     connection_settings: ConnectionOptions = ConnectionOptions()
     interlocks: list[InterlockOptions] = []
 
-    @validator("interlocks")
+    @field_validator("interlocks")
     def validate_interlcoks(cls, v):
         vals = []
         for x in v:
@@ -55,6 +55,7 @@ class AcceleratorOptions(BaseModel):
 class Accelerator:
     def __init__(self, options: AcceleratorOptions, ctx=None) -> None:
         config_root_logging()
+        start_logging_thread()
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.info('Control lib init')
 

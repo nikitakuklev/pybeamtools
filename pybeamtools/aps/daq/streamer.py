@@ -13,6 +13,7 @@ import caproto
 from caproto.threading.client import PV
 import numba
 import numpy as np
+from pybeamtools.aps.daq.callbacks import LifetimeCallback
 
 from pybeamtools.aps.daq.data import FakePvObject, PerformanceData, get_bpm_channel_properties, \
     post_process_daq_object_via_paths
@@ -21,9 +22,6 @@ from pybeamtools.controlsdirect.clib import Accelerator
 from pybeamtools.utils.logging import config_root_logging
 
 TRACE = False
-
-
-
 
 
 # Numba will hopefully hardcode the window and step values, ala C++ templates
@@ -92,7 +90,7 @@ def numpy_rolling_mean_cumsum(mat, tarr):
 #     # rdf.index = ts
 #     return [rdf.values, ts.values]
 class GenericStreamer(ABC):
-    def __init__(self, name: str, channel: str, buffer_size: int, debug=False):
+    def __init__(self, name: str, channel: str, buffer_size: int, keys: list[str] = None, debug=False):
         self.acc = Accelerator.get_singleton()
         self.name = name
         self.channel_name = channel
@@ -114,6 +112,7 @@ class GenericStreamer(ABC):
         self.monitor_thread = None
         self.time_start: Optional[float] = None
         self.connection_evt_timestamps = collections.deque(maxlen=buffer_size)
+        self.keys = keys
 
         self.event_cb_time_history = collections.deque(maxlen=buffer_size)
         self.event_cb_timestamps = collections.deque(maxlen=buffer_size)
@@ -146,7 +145,7 @@ class GenericStreamer(ABC):
                 # Useful with ray
                 print(msg)
             else:
-                self.logger.debug(msg)
+                self.logger.debug(msg, stacklevel=2)
 
     def lerror(self, msg):
         if self.log_with_print:
@@ -293,7 +292,7 @@ class EPICSStreamer(GenericStreamer):
             [x[1] for x in buffers],
             [x[2] for x in buffers],
         )
-        return np.array(data), np.array(times), tags
+        return np.array(data)[:, None], np.array(times), tags
 
     def event_callback(self, sub: caproto.threading.client.Subscription, x: caproto.EventAddResponse):
         self.ldebug(f"ST [{self.name}] | monitor {x=}")
@@ -404,6 +403,7 @@ class DAQStreamer(ABC):
         self.field_spec = None
         self.fields_paths: dict[str, list[str]] = {}
         self.keys = None
+
         self.cbs: dict[str, Callable] = {}
         self.cbs_kwargs: dict[str, dict] = {}
         self.monitor_limit = None
@@ -518,8 +518,6 @@ class DAQStreamer(ABC):
             self.lerror(f"Error in event processing: {e} {traceback.format_exc()}")
             self.event_cb_result = {"success": False, "cbs": {}}
             self.event_cb_result_buffer.append(self.event_cb_result)
-
-
 
     # gets pvaccess.pvaccess.PvObject
     def __cbinternal(self, x):
@@ -729,7 +727,11 @@ class ArrayStreamer(DAQStreamer, RayMixin, ABC):
         super().__init__(name, channel, buffer_size, debug)
 
     def get_latest_buffers(self, n, mode="ds") -> tuple[np.ndarray, np.ndarray, list[str]]:
-        """Get the latest n buffers of particular kind"""
+        """
+        Get the latest n buffers of particular kind as a tuple of arrays.
+        First array is a 2D matrix with columns being signals (F_CONTIGUOUS)
+        Second array is a 1D array of timestamps
+        """
         if self.event_cnt < n:
             return None, None, []
         # release quickly
@@ -1133,122 +1135,3 @@ class RayStreamerWrapper:
         import ray
 
         return ray.get(self.obj.exec_fun.remote(f))
-
-
-class LifetimeCallback:
-    def __init__(self,
-                 lifetime_processors: dict[str, tuple[int, int]],
-                 lower_limit: float = None,
-                 upper_limit: float = None,
-                 reinjection_threshold: float = None,
-                 debug=False,
-                 ):
-        self.results = {}
-        for k, v in lifetime_processors.items():
-            self.results[k] = collections.deque(maxlen=100)
-        self.counter = 0
-        self.lifetime_processors = lifetime_processors
-        self.result_last = {}
-        self.result_combined = {k: {} for k in self.lifetime_processors.keys()}
-        self.debug = debug
-        self.logger = logging.getLogger(__name__)
-        self.log_with_print = False
-        self.lower_limit = lower_limit
-        self.upper_limit = upper_limit
-        self.max_fit_error = reinjection_threshold
-
-    def ldebug(self, msg):
-        if self.debug:
-            self.logger.debug(msg)
-
-    def reset_counters(self):
-        self.counter = 0
-
-    def __call__(self, streamer: ArrayStreamer, data, st_name: str):
-        from pybeamtools.physics.lifetime import compute_lifetime_exponential_v2
-
-        cnt = self.counter
-        updates = {}
-
-        # if self.debug:
-        #    print(f"Processing S{sector} {cnt=} from {streamer=}")
-        for metric, metric_config in self.lifetime_processors.items():
-            trigcnt, avgcnt = metric_config
-            if cnt > 0 and cnt % trigcnt == 0:
-                mat, times, tags = streamer.get_latest_buffers(avgcnt)
-                if mat is not None:
-                    lts = compute_lifetime_exponential_v2(times, mat)
-                    slopes = z[1, :]
-                    lifetimes = -1 / slopes / 3600
-                    # df = pd.DataFrame(lts[None, :], columns=streamer.keys, index=[time.time()])
-                    # self.results[k][sector].append(df)
-                    individual_raw = {streamer.keys[i]: lts[i] for i in range(len(streamer.keys))}
-                    # median_lt = np.median(lts)
-                    individual = {}
-                    if self.lower_limit is not None:
-                        for k, v in individual_raw.items():
-                            individual[k] = max(v, self.lower_limit)
-                    else:
-                        individual = individual_raw
-
-                    if self.upper_limit is not None:
-                        for k, v in individual.items():
-                            individual[k] = min(v, self.upper_limit)
-
-                    updates[metric] = {
-                        "timestamp": time.time(),
-                        "raw": individual,
-                        "msum": {streamer.keys[i]: np.mean(mat, axis=0)[i] for i in range(len(streamer.keys))}
-                    }
-                    self.result_combined[metric].update(updates[metric])
-                    self.ldebug(
-                            f"LTCB trig [{st_name=}] [{metric=}]: {mat.shape=} @ " f"{updates[metric]['timestamp']}"
-                    )
-                else:
-                    self.ldebug(f"LTCB trig [{st_name=}] [{metric=}]: NO DATA")
-        self.result_last = updates
-
-        self.counter += 1
-        self.ldebug(f"LTCB {cnt=} result [{st_name=}] = {self.result_last}")
-        # return self.result_combined
-        return self.result_last
-
-
-class ScalarLifetimeCallback(LifetimeCallback):
-    def __call__(self, streamer: ArrayStreamer, data, st_name: str):
-        from pybeamtools.physics.lifetime import compute_lifetime_exponential_v2
-
-        cnt = self.counter
-        updates = {}
-
-        for metric, metric_config in self.lifetime_processors.items():
-            trigcnt, avgcnt = metric_config
-            if cnt > 0 and cnt % trigcnt == 0:
-                values, times, tags = streamer.get_latest_buffers(avgcnt)
-                if values is not None:
-                    if values.ndim != 1:
-                        raise ValueError(f'Expected 1D array, got {values=}')
-                    values = values.clip(1e-6, None)
-                    values = values[:, None]
-                    lts = compute_lifetime_exponential_v2(times, values)
-                    assert len(lts) == 1, f'BAD LIFETIME {lts=} {values.shape=} {times.shape=} {tags=}'
-                    individual = lts[0]
-                    if not np.isfinite(individual):
-                        individual = 0.0
-                    if self.lower_limit is not None:
-                        individual = max(individual, self.lower_limit)
-                    updates[metric] = {
-                        "timestamp": time.time(),
-                        "raw": individual,
-                    }
-                    self.result_combined[metric].update(updates[metric])
-                    self.ldebug(
-                            f"LTCB trig [{st_name=}] [{metric=}]: {values.shape=} @ " f"{updates[metric]['timestamp']}"
-                    )
-                else:
-                    self.ldebug(f"LTCB trig [{st_name=}] [{metric=}]: NO DATA")
-        self.result_last = updates
-
-        self.counter += 1
-        self.ldebug(f"LTCB {cnt=} result [{st_name=}] = {self.result_last}")
-        return self.result_last

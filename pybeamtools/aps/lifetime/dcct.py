@@ -8,7 +8,8 @@ import threading
 import time
 from queue import Queue
 
-from pybeamtools.aps.daq.streamer import EPICSStreamer, ScalarLifetimeCallback
+from pybeamtools.aps.daq.callbacks import ScalarLifetimeCallback
+from pybeamtools.aps.daq.streamer import EPICSStreamer
 from pybeamtools.controlsdirect.clib import Accelerator
 from pybeamtools.sim.softioc import DynamicIOC
 from pybeamtools.utils.logging import config_root_logging
@@ -26,6 +27,7 @@ class DCCTLifetimeProcessor:
                  verbosity=logging.WARNING,
                  ioc_verbosity=logging.WARNING,
                  streamer_kwargs: dict = None,
+                 lifetime_callback_kwargs: dict = None,
                  ):
 
         if reset_logging:
@@ -44,6 +46,7 @@ class DCCTLifetimeProcessor:
         self.ioc_verbosity = ioc_verbosity
         self.debug = verbosity <= logging.DEBUG
         self.streamer_kwargs = streamer_kwargs or {}
+        self.lifetime_callback_kwargs = lifetime_callback_kwargs or {}
         self.streamers = {}
         self.ioc_channels = []
         self.n_agg = 0
@@ -72,7 +75,8 @@ class DCCTLifetimeProcessor:
     def setup_streamers(self):
         for name, ch in self.channel_map.items():
             try:
-                self.streamers[name] = EPICSStreamer(name=name, channel=ch, buffer_size=100, debug=self.debug,)
+                self.streamers[name] = EPICSStreamer(name=name, channel=ch, buffer_size=100, debug=self.debug,
+                                                     keys=['dcct'])
             except Exception as ex:
                 logger.error(f"Failed to connect {name}={ch} - exception {ex}")
                 raise ex
@@ -87,7 +91,8 @@ class DCCTLifetimeProcessor:
 
     def setup_lifetime_cbs(self):
         for s, v in self.streamers.items():
-            ltcb = ScalarLifetimeCallback(self.lifetime_processors[s], self.debug, **self.streamer_kwargs)
+            ltcb = ScalarLifetimeCallback(lifetime_processors=self.lifetime_processors[s], debug=self.debug,
+                                          **self.lifetime_callback_kwargs)
             v.clear_callbacks()
             v.add_callback("lifetime", ltcb, f_kwargs=dict(st_name=s))
 
@@ -112,7 +117,7 @@ class DCCTLifetimeProcessor:
     def submit_pv_updates(self, streamer, results):
         pv_updates = {}
         for metric, result in results.items():
-            value = result['raw']
+            value = result['raw']['dcct']
             channel = self.publish_format.format(x=streamer.name, metric=metric)
             pv_updates[channel] = value
             self.ldebug(f"Channel {channel}={value}")
@@ -138,7 +143,7 @@ class DCCTLifetimeProcessor:
                     if len(cb_results) > 0:
                         self.linfo(f"PROC | agg results {results}")
                         self.submit_pv_updates(streamer, cb_results)
-                self.linfo("-------------------------------------")
+                #self.linfo("-------------------------------------")
                 self.n_agg += 1
             except:
                 logger.exception("Exception in aggregator thread", exc_info=True, stack_info=True)
@@ -162,7 +167,7 @@ class DCCTLifetimeProcessor:
                 streamer = data[0]
                 results = data[1]
 
-                self.linfo(f"PROC | agg event at local time [{time.time()}]")
+                self.ldebug(f"PROC | agg event at local time [{time.time()}]")
                 agg_logic(streamer, results)
 
         self.agg_thread = threading.Thread(target=f, name="aggregator_thread", daemon=True)

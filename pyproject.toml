@@ -1,2 +1,43 @@
 [tool.ruff]
 line-length = 120
+
+[build-system]
+requires = [
+    "setuptools >= 64",
+    "numpy >= 1.20.0",
+    "pandas",
+    "pydantic >= 2.2",
+    "ipywidgets",
+    "tqdm",
+    "pytest",
+    "pysdds"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pybeamtools"
+authors = [{name = "Nikita Kuklev"}]
+version = "0.2.3"
+license = {text = "MIT"}
+description = "Various tools for accelerator physics"
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.9",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+    "Intended Audience :: Science/Research"]
+requires-python = ">=3.9"
+
+[project.scripts]
+aatool = "pybeamtools.archiver.aautil:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["pybeamtools*"]
+
+[tool.setuptools.package-data]
+pybeamtools = ["*.sdds", "*.txt", "*.json", "*.ui", "*.yaml", "*.yml", "*.workspace", "*.py"]

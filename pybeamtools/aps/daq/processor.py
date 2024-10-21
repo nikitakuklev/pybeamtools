@@ -68,7 +68,6 @@ class DAQProcessor:
         logging.getLogger("caproto").setLevel(ioc_verbosity)
 
         import faulthandler
-
         faulthandler.enable(file=sys.stderr)
 
         self.streamers = {}
@@ -240,7 +239,7 @@ class LifetimeProcessor(DAQProcessor, ABC):
         sectors: list[int] = None,
         ds_window: int = None,
         ds_step: int = None,
-        daq_dec_factor=32,
+        daq_dec_factor: int = 1,
         lifetime_processors: dict = None,
         trigger_mode: str = "periodic",
         trigger_params: dict = None,
@@ -251,9 +250,26 @@ class LifetimeProcessor(DAQProcessor, ABC):
         verbosity: int = logging.INFO,
         ioc_verbosity: int = logging.WARNING,
         streamer_kwargs: dict = None,
-        lower_limit: float = -0.1,
-        upper_limit: float = 20,
+        lifetime_callback_kwargs: dict = None,
     ):
+        """
+        :param channel_format: format string of the PVA channel name
+        :param publish_format: format string of the CA channel for results
+        :param sectors: which (double) sector DAQ servers will be used
+        :param ds_window: downsampling window size
+        :param ds_step: downsampling step size
+        :param daq_dec_factor: decimation factor of the incoming DAQ data (if not raw)
+        :param lifetime_processors: list of config tuples for lifetime analysis
+        :param trigger_mode: 'periodic' or 'trigger'
+        :param trigger_params:
+        :param show_table:
+        :param reset_logging:
+        :param run_control: name of the run control record PV to use
+        :param interfaces:
+        :param verbosity: log level
+        :param ioc_verbosity:
+        :param streamer_kwargs:
+        """
         super().__init__(
             channel_format=channel_format,
             sectors=sectors,
@@ -289,14 +305,21 @@ class LifetimeProcessor(DAQProcessor, ABC):
                 }
         self.trigger_params = trigger_params
         self.publish_format = publish_format
-        self.lower_limit = lower_limit
-        self.upper_limit = upper_limit
         self.n_agg = 0
         self.last_agg = None
         self.is_agg_running = False
         self.agg_thread = None
         self.last_processed: dict[str, dict[str, Any]] = {}
         self.overall_processed: dict[str, dict[str, Any]] = {}
+
+        if lifetime_callback_kwargs is None:
+            lifetime_callback_kwargs = {
+                "lower_limit": -0.1,
+                "upper_limit": 20,
+                #"max_diff_from_first_sample_threshold": None,
+                #"max_diff_from_first_sample_count": None,
+            }
+        self.lifetime_callback_kwargs = lifetime_callback_kwargs
 
         pvdb = {}
         for x in lifetime_processors.keys():
@@ -321,9 +344,9 @@ class LifetimeProcessor(DAQProcessor, ABC):
         super().setup_streamers()
         for s, v in self.streamers.items():
             ltcb = LifetimeCallback(self.lifetime_processors,
-                                    lower_limit=self.lower_limit, upper_limit=self.upper_limit, debug=self.debug)
+                                    debug=self.debug,
+                                    **self.lifetime_callback_kwargs)
             v.clear_callbacks()
-            # v.add_callback(functools.partial(timing_callback, k=k))
             v.add_callback("lifetime", ltcb, f_kwargs=dict(st_name=s))
 
         self.ldebug("Added lifetime callback to streamers")
@@ -490,9 +513,10 @@ class LifetimeProcessor(DAQProcessor, ABC):
                 self.process_streamer_results(results)
                 print_keys = ["median_by_streamer"]
                 tdict = {k: self.last_processed[k] for k in print_keys}
-                self.linfo(f"PROC | agg results {tdict}")
-                self.linfo("-------------------------------------")
+                self.ldebug(f"PROC | agg results {tdict}")
+                #self.linfo("-------------------------------------")
                 self.n_agg += 1
+                return tdict
             except:
                 logger.exception("Exception in aggregator thread", exc_info=True, stack_info=True)
 
@@ -548,12 +572,15 @@ class LifetimeProcessor(DAQProcessor, ABC):
                         target_tag += subsample
                         continue
                     self.linfo(
-                        f"PROC | agg trig [{target_tag}] (+{delay=}) on [{trigger_channel}]=[{evd}]@[{evt}] at "
-                        f"local time [{time.time()}]"
+                        f"PROC | agg trig [{target_tag}] (+{delay=}) on [{trigger_channel}]=[{evd}]@[{evt:.4f}] at "
+                        f"local time [{time.time():.4f}]"
                     )
                     time.sleep(delay)
-                    agg_logic(data_tag)
+                    tdict = agg_logic(data_tag)
+                    result_cnt = {k: len(v) for k,v in tdict['median_by_streamer'].items()}
+                    self.linfo(f"PROC | update cnt {result_cnt} at {time.time():.4f}")
                     target_tag += subsample
+
                     # else:
                     #    self.ldebug(f"PROC | agg trig {trig_cnt} on {trigger_channel} at {time.time()} (skipped)")
                     # trig_cnt += 1
@@ -608,9 +635,8 @@ class RayLifetimeProcessor(LifetimeProcessor):
 
         for st_name, st in self.streamers.items():
             ltcb = LifetimeCallback(self.lifetime_processors,
-                                    lower_limit=self.lower_limit,
-                                    upper_limit=self.upper_limit,
-                                    debug=self.debug)
+                                    debug=self.debug,
+                                    **self.lifetime_callback_kwargs)
             st.clear_callbacks.remote()
             r = st.add_callback.remote("lifetime", ltcb, f_kwargs=dict(st_name=st_name))
             ray.get(r)
@@ -645,6 +671,9 @@ class RayLifetimeProcessor(LifetimeProcessor):
         import ray
 
         def signal_handler(sig, frame):
+            logger.warning("=======================================")
+            logger.warning("=======================================")
+            logger.warning("=======================================")
             logger.warning("Got Ctrl+C - stopping!")
             self.stop_aggregator_thread()
             for st in self.streamers.values():
