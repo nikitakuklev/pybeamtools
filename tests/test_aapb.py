@@ -1,5 +1,4 @@
 import io
-import tempfile
 
 from pybeamtools.archiver import EPICSEvent_pb2
 from pybeamtools.archiver.rawdata import DBR_PB_TO_TYPE_MAP, PBFile
