@@ -36,6 +36,7 @@ def test_write():
         ev.secondsintoyear = i
         ev.nano = i * 50 + 1
         ev.val = i * 10.0
+        events.append(ev)
 
     pb.events = events
 
@@ -46,6 +47,10 @@ def test_write():
     pb2.read_header()
     assert pb2.pi.pvname == 'test'
     assert pb2.pi.year == 2020
+
+    pb2.read_events()
+    assert len(pb2.events) == 5
+    assert pb2.events[3].val == 30.0
 
 
 

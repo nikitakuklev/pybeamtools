@@ -54,6 +54,23 @@ DBR_TYPE_TO_PB_MAP = {0: pbe.ScalarString,
 
 DBR_PB_TO_TYPE_MAP = {v: k for k, v in DBR_TYPE_TO_PB_MAP.items()}
 
+DBR_TYPE_TO_NP = {0:None,
+                      1: np.int32,
+                      2: np.float32,
+                      3: np.int32,
+                      4: np.int8,
+                      5: np.int32,
+                      6: np.float64,
+                      7: None,
+                      8: np.int32,
+                      9: np.float32,
+                      10: np.int32,
+                      11: np.int8,
+                      12: np.int32,
+                      13: np.float64,
+                      14: None
+                      }
+
 
 def unescape_new_line(l, skipend=0):
     l = list(l)
@@ -203,9 +220,7 @@ class PBFile:
         return self
 
     def __next__(self):
-        # n = self.next_event()
-        # if n is None:
-        while ((n := self.next_event()) is None):
+        while (n := self.next_event()) is None:
             pass
         return n
 
@@ -216,8 +231,9 @@ class PBFile:
         """
         Do actual protobuf conversion after unescaping the string
         """
-        # ll = next_line[:-1]
-        # ll = bytes(memoryview(next_line)[:-1])
+        # NOTE: This is a performance critical region and unfortunately Python makes a copy of the string here
+        # memoryview is also unhelpful
+        # Need to figure out how to avoid this
         ll = next_line[:-1]
         ll = self.unescape(ll)
 
@@ -243,11 +259,7 @@ class PBFile:
         self.pos += 1
         if next_line == b'':
             raise StopIteration
-        # assert len(next_line) >= 6, f'Line too short ????'
-
         c = self.string_to_event(next_line)
-        # if self.pos % 100000 == 0:
-        #    print(self.pos, c.secondsintoyear)
         assert not isinstance(c, bool), "wtf???"
         return c
 
@@ -285,9 +297,10 @@ class PBFile:
 
     def _process_event_ts(self):
         events = self.events or self.read_events()
+        ty = np.datetime64(f'{self.year}-01-01T00:00')
+        # TODO: Check performance
         # e1 = events[0]
         # el = events[-1]
-        ty = np.datetime64(f'{self.year}-01-01T00:00')
         # start_time = ty + np.timedelta64(e1.secondsintoyear, 's') + np.timedelta64(e1.nano, 'ns')
         # end_time = ty + np.timedelta64(el.secondsintoyear, 's') + np.timedelta64(el.nano, 'ns')
         # print(f'{self.f}: {start_time=} --> {end_time=}')
