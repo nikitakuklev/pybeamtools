@@ -1,7 +1,9 @@
 import pandas as pd
-from pydantic import BaseModel
 
-from ..utils.pydantic import CallableModel, PBClass
+
+#from pydantic import BaseModel
+
+#from ..utils.pydantic import CallableModel, PBClass
 
 
 def add_dicts(d1, d2):
@@ -43,8 +45,12 @@ class Group:
 
 
 class Knob:
-    # A mapping that represents a set of groups and their coefficients
     def __init__(self, name: str, group_coefficients: dict[Group, float]):
+        """
+        A mapping that represents a set of groups and their coefficients
+        :param name:
+        :param group_coefficients:
+        """
         assert all(isinstance(k, Group) for k in group_coefficients.keys())
         self.name: str = name
         self.group_coefficients: dict[Group, float] = group_coefficients
@@ -55,14 +61,21 @@ class Knob:
     def __hash__(self):
         return hash(self.name) + hash(frozenset(self.group_coefficients.items()))
 
+    def __repr__(self):
+        disp = {k.name: v for k, v in self.group_coefficients.items()}
+        return f'Knob [{self.name}] ({disp})'
+
     @property
     def groups(self):
         return list(self.group_coefficients.keys())
 
-    def get_channel_coefficients(self):
+    def get_group_coefficients(self) -> dict[str, float]:
+        return {g.name: c for g, c in self.group_coefficients.items()}
+
+    def get_channel_coefficients(self) -> dict[str, float]:
         data = {}
         for g, c in self.group_coefficients.items():
-            print(self.name, g, c, g.channel_coefficients)
+            #print(self.name, g, c, g.channel_coefficients)
             if c == 0:
                 continue
             data = add_dicts(data, multiply_dict(g.channel_coefficients, c))
@@ -70,9 +83,11 @@ class Knob:
 
 
 class KnobManager:
-    def __init__(self, knobs_map: dict[str, Knob] = None, groups_map: dict[str, Group] = None):
-        self.knobs_map: dict[str, Knob] = knobs_map or {}
-        self.groups_map: dict[str, Group] = groups_map or {}
+    def __init__(self, knobs: list[Knob] = None, groups: list[Group] = None):
+        knobs_map = {k.name: k for k in knobs} if knobs else {}
+        self.knobs_map: dict[str, Knob] = knobs_map
+        groups_map = {g.name: g for g in groups} if groups else {}
+        self.groups_map: dict[str, Group] = groups_map
         self.validate()
 
     @property
@@ -146,14 +161,34 @@ class KnobManager:
 
         self.knobs_map[knob.name] = knob
 
+    def compute_groups(self, knob_values: dict[str, float]) -> dict[str, float]:
+        """
+        Determine final group values based on knob values
+        :param knob_values:
+        :return:
+        """
+        assert all(k in self.knobs_map for k in knob_values.keys()), 'Knobs not found'
+        data = {}
+        for k, v in knob_values.items():
+            knob = self.knobs_map[k]
+            if v == 0:
+                continue
+            data = add_dicts(data, multiply_dict(knob.get_group_coefficients(), v))
+        return data
+
     def compute_channels(self, knob_values: dict[str, float]) -> dict[str, float]:
+        """
+        Determine final channel values based on knob values
+        :param knob_values:
+        :return:
+        """
         assert all(k in self.knobs_map for k in knob_values.keys()), 'Knobs not found'
         data = {}
         for k, v in knob_values.items():
             knob = self.knobs_map[k]
             #print(k, v, knob.get_channel_coefficients())
-            if v == 0:
-                continue
+            #if v == 0:
+            #    continue
             data = add_dicts(data, multiply_dict(knob.get_channel_coefficients(), v))
         return data
 
