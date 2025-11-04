@@ -227,7 +227,7 @@ class LifetimeMeasureAdaptive:
             normalized_lifetime = normalized_lifetime * (avg_current / self.current_ref) ** self.normalized_power
             logger.debug(f'Normalized current lifetime is {normalized_lifetime:.3f}h')
 
-        return lifetime, normalized_lifetime, np.mean(current_data)
+        return float(lifetime), float(normalized_lifetime), float(np.mean(current_data))
 
         # class EPICSLifetimeMeasurement:
 # """

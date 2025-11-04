@@ -475,7 +475,11 @@ class Accelerator:
         self.ensure_connection([pv])
         result = pv.read(data_type="time", timeout=timeout)
         if len(result.data) == 1:
-            return result.data[0]
+            r = result.data[0]
+            if isinstance(r, (np.float64, np.float32)):
+                return float(r)
+            elif isinstance(r, np.integer):
+                return int(r)
         else:
             return result.data
 
