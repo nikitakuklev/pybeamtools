@@ -3,9 +3,16 @@ import time
 import numpy as np
 import pyfftw
 
-from pybeamtools.physics.sliding_fft import STFT_FFTW, STFT_FFTW_MANY, stft_fftw_1d_builder, stft_scipy_1d, \
-    stft_numpy_strided, stft_numpy_strided_v2, stft_welch, \
-    stft_fftw_1d
+from pybeamtools.physics.sliding_fft import (
+    STFT_FFTW,
+    STFT_FFTW_MANY,
+    stft_fftw_1d_builder,
+    stft_scipy_1d,
+    stft_numpy_strided,
+    stft_numpy_strided_v2,
+    stft_welch,
+    stft_fftw_1d,
+)
 
 
 def test_stft_perf():
@@ -14,13 +21,13 @@ def test_stft_perf():
     ITERATIONS = 500
 
     xs = int(352e6 / 1296 / 2)
-    xi = pyfftw.empty_aligned(xs, dtype='int32', n=32)
-    xi[:] = np.random.randint(-1e6, 1e6, int(352e6 / 1296 / 2), dtype='int32')
+    xi = pyfftw.empty_aligned(xs, dtype="int32", n=32)
+    xi[:] = np.random.randint(-1e6, 1e6, int(352e6 / 1296 / 2), dtype="int32")
 
-    assert xi.flags['C_CONTIGUOUS']
+    assert xi.flags["C_CONTIGUOUS"]
     assert pyfftw.is_byte_aligned(xi)
 
-    x = pyfftw.empty_aligned(xs, dtype='float32', n=32)
+    x = pyfftw.empty_aligned(xs, dtype="float32", n=32)
     t1 = time.perf_counter()
     x[:] = xi[:]
     x -= x.mean()
@@ -114,12 +121,12 @@ def test_stft_perf():
 
     for i in range(ITERATIONS):
         t1 = time.perf_counter()
-        x2 = x[:nchunks * WINDOW].reshape(nchunks, WINDOW)
-        assert x2.flags['C_CONTIGUOUS']
+        x2 = x[: nchunks * WINDOW].reshape(nchunks, WINDOW)
+        assert x2.flags["C_CONTIGUOUS"]
         P = f1(x2)
 
-        x3 = x[STEP:STEP + nchunks2 * WINDOW].reshape(nchunks2, WINDOW)
-        assert x3.flags['C_CONTIGUOUS']
+        x3 = x[STEP : STEP + nchunks2 * WINDOW].reshape(nchunks2, WINDOW)
+        assert x3.flags["C_CONTIGUOUS"]
         P += f2(x3)
 
         t2 = time.perf_counter()
@@ -137,12 +144,12 @@ def test_stft_perf():
 
     for i in range(ITERATIONS):
         t1 = time.perf_counter()
-        x2 = x[:nchunks * WINDOW].reshape(nchunks, WINDOW)
-        assert x2.flags['C_CONTIGUOUS']
+        x2 = x[: nchunks * WINDOW].reshape(nchunks, WINDOW)
+        assert x2.flags["C_CONTIGUOUS"]
         P = f1(x2)
 
-        x3 = x[STEP:STEP + nchunks2 * WINDOW].reshape(nchunks2, WINDOW)
-        assert x3.flags['C_CONTIGUOUS']
+        x3 = x[STEP : STEP + nchunks2 * WINDOW].reshape(nchunks2, WINDOW)
+        assert x3.flags["C_CONTIGUOUS"]
         P += f2(x3)
 
         t2 = time.perf_counter()

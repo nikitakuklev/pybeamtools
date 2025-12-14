@@ -7,9 +7,6 @@ import threading
 import logging.handlers
 import queue
 
-
-# logger = logging.getLogger(__name__)
-
 class LogManager:
     queue = multiprocessing.Queue(10000)
 
@@ -19,8 +16,6 @@ class LoggingState:
 
 
 def config_root_logging(level=logging.DEBUG, reset_handlers=False, suppress_low_priority=True):
-    logger = logging.getLogger(__name__)
-    # logger.info('Logging setup finished')
     if suppress_low_priority:
         suppress_low_priority_modules()
     if reset_handlers:
