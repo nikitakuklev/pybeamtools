@@ -22,6 +22,7 @@ license = {text = "MIT"}
 description = "Various tools for accelerator physics"
 readme = "README.md"
 classifiers = [
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.10",
@@ -34,6 +35,7 @@ requires-python = ">=3.9"
 
 [project.scripts]
 aatool = "pybeamtools.archiver.aautil:main"
+lifetimetool = "pybeamtools.physics.lifetime:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
