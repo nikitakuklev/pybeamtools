@@ -188,7 +188,7 @@ class LifetimeMeasureAdaptive:
         times, current_data = self.get_pv_data(self.channel, t_start)
         logger.debug(f"Got {len(current_data)} current points in {t_elapsed:.2f}s")
 
-        lifetime, avg_current, ltstdev = self.compute_raw_lifetime(times, current_data)
+        lifetime, avg_current, _ = self.compute_raw_lifetime(times, current_data, stdev=False)
 
         normalized_lifetime = lifetime
         if self.normalized_coupling:
@@ -206,9 +206,9 @@ class LifetimeMeasureAdaptive:
             normalized_lifetime = normalized_lifetime * (avg_current / self.current_ref) ** self.normalized_power
             logger.debug(f"Normalized current lifetime is {normalized_lifetime:.3f}h")
 
-        return float(lifetime), float(normalized_lifetime), float(np.mean(current_data))
+        return float(lifetime), float(normalized_lifetime), float(np.mean(current_data)), times, current_data
 
-    def compute_raw_lifetime(self, times: np.ndarray, current_data: np.ndarray):
+    def compute_raw_lifetime(self, times: np.ndarray, current_data: np.ndarray, stdev=True):
         # N = N0*exp(-lambda*t)
         # ln(N) = -lambda*t + ln(N0)
         # y = a*t+b
@@ -228,16 +228,24 @@ class LifetimeMeasureAdaptive:
             raise ValueError(f"Error - too small current change {current_data[0]} -> {current_data[-1]}")
 
         lncurrent = np.log(current_data)
-        z, cov = np.polyfit(times, lncurrent, 1, cov=True)  # cov
-        stdev = np.sqrt(np.diag(cov))[0]
-        slope = z[0]
+        if stdev:
+            z, cov = np.polyfit(times, lncurrent, 1, cov=True)  # cov
+            stdev = np.sqrt(np.diag(cov))[0]
+            slope = z[0]
 
-        lifetime = -1 / slope / 3600
-        stdev_lifetime = stdev / (slope**2) / 3600
-        # z2 = np.polyfit(times, current_data, 1)
-        # logger.debug(f'Unnormalized lifetime is %.3f h (linear lifetime %.3f)', lifetime, -avg_current/z2[0]/3600)
-        logger.debug(f"Unnormalized lifetime is %.3fh", lifetime)
-        return float(lifetime), float(avg_current), float(stdev_lifetime)
+            lifetime = -1 / slope / 3600
+            stdev_lifetime = stdev / (slope**2) / 3600
+            # z2 = np.polyfit(times, current_data, 1)
+            # logger.debug(f'Unnormalized lifetime is %.3f h (linear lifetime %.3f)', lifetime, -avg_current/z2[0]/3600)
+            logger.debug(f"Unnormalized lifetime is %.3fh", lifetime)
+            return float(lifetime), float(avg_current), float(stdev_lifetime)
+        else:
+            z = np.polyfit(times, lncurrent, 1)  # cov
+            slope = z[0]
+
+            lifetime = -1 / slope / 3600
+            logger.debug(f"Unnormalized lifetime is %.3fh", lifetime)
+            return float(lifetime), float(avg_current), None
 
     def compute_lifetime(self, times: np.ndarray, current_data: np.ndarray):
         lifetime, avg_current, ltstdev = self.compute_raw_lifetime(times, current_data)
@@ -261,12 +269,12 @@ def lifetime_cli():
     logging.getLogger("caproto").propagate = False
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("-current", type=str, default="APSU:MMPS2:DCCT1:beamC-Calc", help="current channel PV")
+    parser.add_argument("-current", type=str, default="S-DCCT:CurrentM", help="current channel PV")
     parser.add_argument("-minchange", type=float, default=0.0002, help="min fractional/abs current change")
     parser.add_argument("-maxchange", type=float, default=0.0006, help="max fractional/abs current change")
     parser.add_argument("-changemode", action="store_true", default=True)
     parser.add_argument("-tmax", type=float, default=25.0)
-    parser.add_argument("-tmin", type=float, default=10.0)
+    parser.add_argument("-tmin", type=float, default=20.0)
     parser.add_argument("-cref", type=float, default=25.0)
     parser.add_argument("-norm", action="store_true", default=True)
     parser.add_argument("-normpow", type=float, default=2 / 3)
@@ -288,3 +296,11 @@ def lifetime_cli():
         current_ref=args.cref,
         normalized_power=args.normpow,
     )
+    lifetime, norm_lifetime, avg_current = ltm.measure()
+    print(f"Lifetime: {lifetime:.3f} h")
+    print(f"Normalized Lifetime: {norm_lifetime:.3f} h (normalized to {args.cref} mA) with power {args.normpow:.3f}")
+    print(f"Average Current: {avg_current:.3f} mA")
+
+def main():
+    lifetime_cli()
+
