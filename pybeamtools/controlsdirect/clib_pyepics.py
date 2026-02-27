@@ -94,9 +94,9 @@ class AcceleratorPE:
                     self.acc.cnts[name[idx]] = 0
                     self.acc.cbuf[name[idx]] = collections.deque(maxlen=self.acc.CBUF_SIZE)
                     pvs[idx] = pv
-                    if monitor and pv.name not in self.acc.kv_pvs:
+                    if monitor and pv.pvname not in self.acc.kv_pvs:
                         self.acc.subscribe(pv)
-                        self.acc.kv_pvs.append(pv.name)
+                        self.acc.kv_pvs.append(pv.pvname)
             return pvs
 
     @staticmethod
@@ -292,8 +292,8 @@ class AcceleratorPE:
         pv = self.kv.get_one(name)
         self.ensure_connection([pv])
         result = pv.get_with_metadata(form="time", timeout=timeout, use_monitor=False)
-        if len(result.data) == 1:
-            r = result.data[0]
+        if len(result['data']) == 1:
+            r = result['data'][0]
             if isinstance(r, (np.float64, np.float32)):
                 return float(r)
             elif isinstance(r, np.integer):
@@ -301,7 +301,7 @@ class AcceleratorPE:
             else:
                 raise Exception(f"Unknown single value type: {type(r)}")
         else:
-            return result.data
+            return result['data']
 
     def read_all_now(self, names: str | list[str], timeout: float = 1.0, squeeze=False):
         if isinstance(names, str):
