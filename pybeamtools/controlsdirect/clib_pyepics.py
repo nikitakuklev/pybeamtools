@@ -2,6 +2,7 @@ import asyncio
 import functools
 import logging
 import time
+from types import SimpleNamespace
 from typing import Callable, Literal, Optional, TYPE_CHECKING
 
 import numpy as np
@@ -12,21 +13,29 @@ from epics import PV, camonitor, caput_many, caget_many
 logger = logging.getLogger(__name__)
 
 
+def _make_response(value, timestamp, status):
+    return SimpleNamespace(
+        data=np.atleast_1d(value),
+        metadata=SimpleNamespace(timestamp=timestamp),
+        status=SimpleNamespace(success=1 if status == 0 else 0),
+    )
+
+
 class CB:
     acc = None
 
     @staticmethod
-    def process(sub, response):
+    def process(pvname=None, value=None, timestamp=None, status=None, **kwargs):
         # t1 = time.perf_counter()
-        name = sub.pv.name
+        name = pvname
         acc = CB.acc
         c = acc.cnts.get(name, 0)
         acc.cnts[name] = c + 1
         b = acc.cbuf.get(name, None)
         if b is None:
             acc.cbuf[name] = []
+        response = _make_response(value, timestamp, status)
         acc.cbuf[name].append((time.time(), response))
-        # acc.cbuf[name].append((None, response))
         # acc.busytime += time.perf_counter()-t1
 
 
@@ -66,7 +75,9 @@ class AcceleratorPE:
             self.channels: dict[str, PV] = {}
             pass
 
-        def __getitem__(self, name: list[str]) -> list[PV]:
+        def __getitem__(self, name: str | list[str]) -> "PV | list[PV]":
+            if isinstance(name, str):
+                return self.get([name])[0]
             return self.get(name)
 
         def get_one(self, name: str, monitor: bool = None) -> PV:
@@ -238,6 +249,23 @@ class AcceleratorPE:
                 break
         return values
 
+    def get_buffer_data_tagged(self,
+                               name: str,
+                               start: float = None,
+                               use_local_time: bool = True,
+                               tag: int = -1
+                               ) -> tuple[list, int]:
+        if tag is not None:
+            if self.cnts[name] == tag:
+                return [], -1
+        # avoid races
+        tag = self.cnts[name]
+        return self.get_buffer_data(name, start, use_local_time), tag
+
+    def get_buffer_tag(self, name: str) -> int:
+        """ Get unique tag representing the latest event for a channel """
+        return self.cnts[name]
+
     def get_buffer_df(
             self,
             name: str,
@@ -291,9 +319,10 @@ class AcceleratorPE:
     def read(self, name: str, timeout: float = 1.0):
         pv = self.kv.get_one(name)
         self.ensure_connection([pv])
-        result = pv.get_with_metadata(form="time", timeout=timeout, use_monitor=False)
-        if len(result['data']) == 1:
-            r = result['data'][0]
+        result = pv.get_with_metadata(form="time", timeout=timeout, use_monitor=False, as_numpy=True)
+        val = np.atleast_1d(result['value'])
+        if len(val) == 1:
+            r = val[0]
             if isinstance(r, (np.float64, np.float32)):
                 return float(r)
             elif isinstance(r, np.integer):
@@ -301,7 +330,7 @@ class AcceleratorPE:
             else:
                 raise Exception(f"Unknown single value type: {type(r)}")
         else:
-            return result['data']
+            return val
 
     def read_all_now(self, names: str | list[str], timeout: float = 1.0, squeeze=False):
         if isinstance(names, str):
@@ -322,10 +351,11 @@ class AcceleratorPE:
         if squeeze:
             r2 = {}
             for k, v in results.items():
-                if len(v) > 1:
+                if v is None:
                     r2[k] = v
                 else:
-                    r2[k] = v[0]
+                    v = np.atleast_1d(v)
+                    r2[k] = v if len(v) > 1 else v[0]
             return r2
         return results
 
@@ -367,7 +397,7 @@ class AcceleratorPE:
         assert min_readings is not None and min_readings >= 0
         assert max_readings is None or max_readings >= min_readings
         assert min_time is None or (0 <= min_time <= timeout)
-        assert reduce is None or reduce in ["mean", "median"]
+        assert reduce is None or reduce in ["mean", "median", "single_only"]
         if max_readings is None:
             max_readings = min_readings if min_readings > 1 else 1
         if self.TRACE:
@@ -481,7 +511,9 @@ class AcceleratorPE:
                     logger.debug(f"PV [{cn}]: [{len(responses)}] / [{min_readings}]")
 
                 if force_read and not ch_completed.get(cn, False):
-                    r = pvs_map[cn].read(data_type="time", timeout=timeout)
+                    _raw = pvs_map[cn].get_with_metadata(form="time", timeout=timeout,
+                                                         use_monitor=False, as_numpy=True)
+                    r = _make_response(_raw['value'], _raw['timestamp'], _raw.get('status', 0))
                     if r.metadata.timestamp > now:
                         if len(responses) > 0:
                             if responses[-1].metadata.timestamp == r.metadata.timestamp:
@@ -644,7 +676,7 @@ class AcceleratorPE:
             cn_readback = readback_map.get(k, None)
             if read_first and cn_readback is not None:
                 pv_readback = self.kv[cn_readback]
-                val = pv_readback.read().data[0]
+                val = np.atleast_1d(pv_readback.get(as_numpy=True, use_monitor=False))[0]
                 if np.isclose(val, v, atol=atol, rtol=rtol):
                     if self.TRACE:
                         logger.debug(

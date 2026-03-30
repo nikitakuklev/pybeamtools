@@ -562,7 +562,7 @@ class Accelerator:
         assert min_readings is not None and min_readings >= 0
         assert max_readings is None or max_readings >= min_readings
         assert min_time is None or (0 <= min_time <= timeout)
-        assert reduce is None or reduce in ["mean", "median"]
+        assert reduce is None or reduce in ["mean", "median", "single_only"]
         if max_readings is None:
             max_readings = min_readings if min_readings > 1 else 1
         if self.TRACE:
