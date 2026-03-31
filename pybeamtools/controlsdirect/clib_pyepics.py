@@ -8,6 +8,7 @@ from typing import Callable, Literal, Optional, TYPE_CHECKING
 import numpy as np
 import pandas as pd
 import collections
+import threading
 from epics import PV, camonitor, caput_many, caget_many
 
 logger = logging.getLogger(__name__)
@@ -22,20 +23,22 @@ def _make_response(value, timestamp, status):
 
 
 class CB:
-    acc = None
+    def __init__(self, acc):
+        self.acc = acc
+        self._lock = threading.Lock()
 
-    @staticmethod
-    def process(pvname=None, value=None, timestamp=None, status=None, **kwargs):
+    def process(self, pvname=None, value=None, timestamp=None, status=None, **kwargs):
         # t1 = time.perf_counter()
         name = pvname
-        acc = CB.acc
-        c = acc.cnts.get(name, 0)
-        acc.cnts[name] = c + 1
-        b = acc.cbuf.get(name, None)
-        if b is None:
-            acc.cbuf[name] = []
+        acc = self.acc
         response = _make_response(value, timestamp, status)
-        acc.cbuf[name].append((time.time(), response))
+        with self._lock:
+            c = acc.cnts.get(name, 0)
+            acc.cnts[name] = c + 1
+            b = acc.cbuf.get(name, None)
+            if b is None:
+                acc.cbuf[name] = collections.deque(maxlen=AcceleratorPE.CBUF_SIZE)
+            acc.cbuf[name].append((time.time(), response))
         # acc.busytime += time.perf_counter()-t1
 
 
@@ -44,7 +47,7 @@ class RingBuffer:
 
     def __init__(self, size):
         self.size = size
-        self.buf = [None] * 100
+        self.buf = [None] * size
         self.idx = 0
         self.len = 0
 
@@ -73,7 +76,7 @@ class AcceleratorPE:
         def __init__(self, acc) -> None:
             self.acc = acc
             self.channels: dict[str, PV] = {}
-            pass
+            self._lock = threading.Lock()
 
         def __getitem__(self, name: str | list[str]) -> "PV | list[PV]":
             if isinstance(name, str):
@@ -83,31 +86,31 @@ class AcceleratorPE:
         def get_one(self, name: str, monitor: bool = None) -> PV:
             return self.get([name], monitor)[0]
 
-        def get(self, name: list[str], monitor: bool = None) -> list[PV]:
-            monitor = monitor or self.acc.default_monitor
+        def get(self, name: str | list[str], monitor: bool = None) -> list[PV]:
+            monitor = monitor if monitor is not None else self.acc.default_monitor
             assert isinstance(name, str) or isinstance(name, list)
+            if isinstance(name, str):
+                name = [name]
             pvs = [None] * len(name)
             new_idxs = []
-            for i, n in enumerate(name):
-                pv = self.channels.get(n, None)
-                if pv is None:
-                    new_idxs.append(i)
-                else:
-                    pvs[i] = pv
-            if len(new_idxs) > 0:
-                # pvs = self.ctx.get_pvs(*name, priority=52)
-                pvs = []
-                for n in name:
-                    pvs.append(PV(n))
-                    time.sleep(0.02)
-                for pv, idx in zip(pvs, new_idxs):
-                    self.channels[name[idx]] = pv
-                    self.acc.cnts[name[idx]] = 0
-                    self.acc.cbuf[name[idx]] = collections.deque(maxlen=self.acc.CBUF_SIZE)
-                    pvs[idx] = pv
-                    if monitor and pv.pvname not in self.acc.kv_pvs:
-                        self.acc.subscribe(pv)
-                        self.acc.kv_pvs.append(pv.pvname)
+            with self._lock:
+                for i, n in enumerate(name):
+                    pv = self.channels.get(n, None)
+                    if pv is None:
+                        new_idxs.append(i)
+                    else:
+                        pvs[i] = pv
+                if len(new_idxs) > 0:
+                    for idx in new_idxs:
+                        pv = PV(name[idx])
+                        time.sleep(0.02)
+                        pvs[idx] = pv
+                        self.channels[name[idx]] = pv
+                        self.acc.cnts[name[idx]] = 0
+                        self.acc.cbuf[name[idx]] = collections.deque(maxlen=self.acc.CBUF_SIZE)
+                        if monitor and pv.pvname not in self.acc.kv_pvs:
+                            self.acc.subscribe(pv)
+                            self.acc.kv_pvs.append(pv.pvname)
             return pvs
 
     @staticmethod
@@ -130,8 +133,7 @@ class AcceleratorPE:
         self.cnts = {}
         self.callbacks = {}
         self.subs_custom = {}
-        self.cbobj = CB
-        CB.acc = self
+        self.cbobj = CB(self)
         self.busytime = 0.0
         self.pvacache = {}
         self.default_monitor = default_monitor
@@ -164,7 +166,7 @@ class AcceleratorPE:
         if pvname not in self.subs_custom:
             raise RuntimeError(f'No custom subscriptions for PV {pvname}')
         s = self.subs_custom[pvname]
-        for tup in s:
+        for tup in list(s):
             if tup[1] == f:
                 pv.remove_callback(tup[0])
                 s.remove(tup)
@@ -197,7 +199,7 @@ class AcceleratorPE:
                 self.kv_pvs.append(pv.pvname)
 
     def is_monitoring(self, name: str):
-        if len(self.callbacks[name]) > 0:
+        if len(self.callbacks.get(name, [])) > 0:
             return True
         return False
 
@@ -247,6 +249,7 @@ class AcceleratorPE:
                 values.append(r)
             else:
                 break
+        values.reverse()
         return values
 
     def get_buffer_data_tagged(self,
@@ -638,20 +641,20 @@ class AcceleratorPE:
         :param try_read_now_after: delay before explicit reads are attempted
         """
         logger.debug(f"WAV: start {data_dict=}")
-        readback_map = readback_map or {}
-        delay_after_write = delay_after_write or AcceleratorPE.DELAY_AFTER_WRITE
-        delay_after_readback = delay_after_readback or AcceleratorPE.DELAY_AFTER_RB
-        readback_timeout = readback_timeout or AcceleratorPE.READBACK_OK_TIMEOUT
-        readback_kwargs = readback_kwargs or dict(min_readings=1, max_readings=1,
-                                                  reduce="single_only", force_read=False)
-        atol_map = atol_map or {}
-        rtol_map = rtol_map or {}
+        readback_map = readback_map if readback_map is not None else {}
+        delay_after_write = delay_after_write if delay_after_write is not None else AcceleratorPE.DELAY_AFTER_WRITE
+        delay_after_readback = delay_after_readback if delay_after_readback is not None else AcceleratorPE.DELAY_AFTER_RB
+        readback_timeout = readback_timeout if readback_timeout is not None else AcceleratorPE.READBACK_OK_TIMEOUT
+        readback_kwargs = readback_kwargs if readback_kwargs is not None else dict(min_readings=1, max_readings=1,
+                                                                                   reduce="single_only", force_read=False)
+        atol_map = atol_map if atol_map is not None else {}
+        rtol_map = rtol_map if rtol_map is not None else {}
         readback_map = {
-            **(readback_map if readback_map is not None else {}),
             **self.io_map,
+            **(readback_map if readback_map is not None else {}),
         }
-        low_map = {**(low_map if low_map is not None else {}), **self.iprops["low"]}
-        high_map = {**(high_map if high_map is not None else {}), **self.iprops["high"]}
+        low_map = {**self.iprops["low"], **(low_map if low_map is not None else {})}
+        high_map = {**self.iprops["high"], **(high_map if high_map is not None else {})}
         delay_between_fresh_reads = 0.5
         individual_read_timeout = timeout
         last_read_now_map = {}
@@ -690,6 +693,7 @@ class AcceleratorPE:
         ]
         all_pvs = self.kv[all_channels]
         self.ensure_connection(all_pvs)
+        now = time.time()
         self.write(pvdict)
 
         logger.debug(
@@ -705,7 +709,6 @@ class AcceleratorPE:
         time.sleep(delay_after_write)
 
         t_start_rb = time.perf_counter()
-        now = time.time()
         rb_results = {}
         last_read = {}
         all_reads = {cn: [] for cn in pvdict}

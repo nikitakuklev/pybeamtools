@@ -44,8 +44,46 @@ def test_dequeue_perf():
     print(f"RingBuffer to list: {t2 - t1}")
 
 
-def test_get_buffer_data():
+def test_get_buffer_data_chronological_order():
+    """get_buffer_data with start= must return results oldest-first."""
+    from types import SimpleNamespace
     acc = Accelerator()
+    pv_name = "TEST:ORDER"
+    acc.cbuf[pv_name] = collections.deque(maxlen=Accelerator.CBUF_SIZE)
+    acc.cnts[pv_name] = 0
+
+    # Insert 5 entries with known increasing timestamps
+    base_ts = 1000.0
+    for i in range(5):
+        ts = base_ts + i
+        response = SimpleNamespace(
+            data=[float(i)],
+            metadata=SimpleNamespace(timestamp=ts),
+        )
+        acc.cbuf[pv_name].append((ts, response))
+
+    # Query with start before all entries
+    data = acc.get_buffer_data(pv_name, start=base_ts - 1, use_local_time=True)
+    assert len(data) == 5
+
+    # Must be chronological: oldest first, newest last
+    timestamps = [r.metadata.timestamp for r in data]
+    assert timestamps == sorted(timestamps), \
+        f"Expected chronological order, got {timestamps}"
+    assert timestamps[0] == base_ts
+    assert timestamps[-1] == base_ts + 4
+
+    # Query with start in the middle — should only return entries after start
+    data = acc.get_buffer_data(pv_name, start=base_ts + 2, use_local_time=True)
+    assert len(data) == 2
+    timestamps = [r.metadata.timestamp for r in data]
+    assert timestamps == [base_ts + 3, base_ts + 4]
+
+    # Query with start=None returns all in chronological order
+    data = acc.get_buffer_data(pv_name, start=None)
+    assert len(data) == 5
+    timestamps = [r.metadata.timestamp for r in data]
+    assert timestamps == sorted(timestamps)
 
 
 class FakeResponse:

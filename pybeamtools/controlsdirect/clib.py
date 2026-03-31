@@ -7,6 +7,7 @@ from typing import Callable, Literal, Optional, TYPE_CHECKING
 import numpy as np
 import pandas as pd
 import collections
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -16,19 +17,21 @@ if TYPE_CHECKING:
 
 
 class CB:
-    acc = None
+    def __init__(self, acc):
+        self.acc = acc
+        self._lock = threading.Lock()
 
-    @staticmethod
-    def process(sub, response):
+    def process(self, sub, response):
         # t1 = time.perf_counter()
         name = sub.pv.name
-        acc = CB.acc
-        c = acc.cnts.get(name, 0)
-        acc.cnts[name] = c + 1
-        b = acc.cbuf.get(name, None)
-        if b is None:
-            acc.cbuf[name] = []
-        acc.cbuf[name].append((time.time(), response))
+        acc = self.acc
+        with self._lock:
+            c = acc.cnts.get(name, 0)
+            acc.cnts[name] = c + 1
+            b = acc.cbuf.get(name, None)
+            if b is None:
+                acc.cbuf[name] = collections.deque(maxlen=Accelerator.CBUF_SIZE)
+            acc.cbuf[name].append((time.time(), response))
         # acc.cbuf[name].append((None, response))
         # acc.busytime += time.perf_counter()-t1
 
@@ -38,7 +41,7 @@ class RingBuffer:
 
     def __init__(self, size):
         self.size = size
-        self.buf = [None] * 100
+        self.buf = [None] * size
         self.idx = 0
         self.len = 0
 
@@ -68,14 +71,14 @@ class Accelerator:
             self.ctx = ctx
             self.acc = acc
             self.channels = {}
-            pass
+            self._lock = threading.Lock()
 
         def __getitem__(self, name: str) -> "PV":
             return self.get(name)
 
         def get(self, name: str | list[str], monitor: bool = None, backend='caproto'):
             singleton = False
-            monitor = monitor or self.acc.default_monitor
+            monitor = monitor if monitor is not None else self.acc.default_monitor
             assert backend in ['caproto', 'pvapy']
             assert isinstance(name, str) or isinstance(name, list)
             if isinstance(name, str):
@@ -85,26 +88,24 @@ class Accelerator:
                 if self.acc.caproto_impl == 'thread':
                     pvs = [None] * len(name)
                     new_idxs = []
-                    for i, n in enumerate(name):
-                        pv = self.channels.get(n, None)
-                        if pv is None:
-                            new_idxs.append(i)
-                        else:
-                            pvs[i] = pv
-                    if len(new_idxs) > 0:
-                        # pvs = self.ctx.get_pvs(*name, priority=52)
-                        pvs = []
-                        for n in name:
-                            pvs.append(self.ctx.get_pvs(n, priority=52)[0])
-                            time.sleep(0.02)
-                        for pv, idx in zip(pvs, new_idxs):
-                            self.channels[name[idx]] = pv
-                            self.acc.cnts[name[idx]] = 0
-                            self.acc.cbuf[name[idx]] = collections.deque(maxlen=self.acc.CBUF_SIZE)
-                            pvs[idx] = pv
-                            if monitor and pv.name not in self.acc.kv_pvs:
-                                self.acc.subscribe(pv)
-                                self.acc.kv_pvs.append(pv.name)
+                    with self._lock:
+                        for i, n in enumerate(name):
+                            pv = self.channels.get(n, None)
+                            if pv is None:
+                                new_idxs.append(i)
+                            else:
+                                pvs[i] = pv
+                        if len(new_idxs) > 0:
+                            for idx in new_idxs:
+                                pv = self.ctx.get_pvs(name[idx], priority=52)[0]
+                                time.sleep(0.02)
+                                pvs[idx] = pv
+                                self.channels[name[idx]] = pv
+                                self.acc.cnts[name[idx]] = 0
+                                self.acc.cbuf[name[idx]] = collections.deque(maxlen=self.acc.CBUF_SIZE)
+                                if monitor and pv.name not in self.acc.kv_pvs:
+                                    self.acc.subscribe(pv)
+                                    self.acc.kv_pvs.append(pv.name)
                     return pvs if not singleton else pvs[0]
                 elif self.acc.caproto_impl == 'asyncio':
                     async def _get_pvs():
@@ -185,8 +186,7 @@ class Accelerator:
         self.callbacks = {}
         self.subs = {}
         self.subs_custom = {}
-        self.cbobj = CB
-        CB.acc = self
+        self.cbobj = CB(self)
         self.busytime = 0.0
         self.pvacache = {}
         self.default_monitor = default_monitor
@@ -238,7 +238,7 @@ class Accelerator:
             if pvname not in self.subs_custom:
                 self.subs_custom[pvname] = []
             s = self.subs_custom[pvname]
-            for tup in s:
+            for tup in list(s):
                 if tup[1] == f:
                     sub = pv.subscribe(data_type="time")
                     sub.remove_callback(tup[0])
@@ -274,7 +274,7 @@ class Accelerator:
 
     def is_monitoring(self, name: str):
         if name in self.subs:
-            if len(self.callbacks[name]) > 0:
+            if len(self.callbacks.get(name, [])) > 0:
                 return True
         return False
 
@@ -364,6 +364,7 @@ class Accelerator:
                 values.append(r)
             else:
                 break
+        values.reverse()
         return values
         # if idx > 0:
         #     # print(f'PV {name}: buffer had {idx} readings past {start} ({[r.metadata.timestamp for r in responses[-idx:]]})')
@@ -396,7 +397,11 @@ class Accelerator:
         buf: collections.deque = self.cbuf[name]
         dps = list(buf)
 
-        if start is None and end is None:
+        if start is None:
+            start = -np.inf
+        if end is None:
+            end = np.inf
+        if start == -np.inf and end == np.inf:
             t = np.array([x[1].metadata.timestamp if not store_local_time else x[0] for x in dps])
             x = np.array([x[1].data[0] for x in dps])
             return t, x
@@ -807,20 +812,20 @@ class Accelerator:
         :param try_read_now_after: delay before explicit reads are attempted
         """
         logger.debug(f"WAV: start {data_dict=}")
-        readback_map = readback_map or {}
-        delay_after_write = delay_after_write or Accelerator.DELAY_AFTER_WRITE
-        delay_after_readback = delay_after_readback or Accelerator.DELAY_AFTER_RB
-        readback_timeout = readback_timeout or Accelerator.READBACK_OK_TIMEOUT
-        readback_kwargs = readback_kwargs or dict(min_readings=1, max_readings=1,
-                                                  reduce="single_only", force_read=False)
-        atol_map = atol_map or {}
-        rtol_map = rtol_map or {}
+        readback_map = readback_map if readback_map is not None else {}
+        delay_after_write = delay_after_write if delay_after_write is not None else Accelerator.DELAY_AFTER_WRITE
+        delay_after_readback = delay_after_readback if delay_after_readback is not None else Accelerator.DELAY_AFTER_RB
+        readback_timeout = readback_timeout if readback_timeout is not None else Accelerator.READBACK_OK_TIMEOUT
+        readback_kwargs = readback_kwargs if readback_kwargs is not None else dict(min_readings=1, max_readings=1,
+                                                                                   reduce="single_only", force_read=False)
+        atol_map = atol_map if atol_map is not None else {}
+        rtol_map = rtol_map if rtol_map is not None else {}
         readback_map = {
-            **(readback_map if readback_map is not None else {}),
             **self.io_map,
+            **(readback_map if readback_map is not None else {}),
         }
-        low_map = {**(low_map if low_map is not None else {}), **self.iprops["low"]}
-        high_map = {**(high_map if high_map is not None else {}), **self.iprops["high"]}
+        low_map = {**self.iprops["low"], **(low_map if low_map is not None else {})}
+        high_map = {**self.iprops["high"], **(high_map if high_map is not None else {})}
         delay_between_fresh_reads = 0.5
         individual_read_timeout = timeout
         last_read_now_map = {}
@@ -862,6 +867,7 @@ class Accelerator:
 
         from caproto.threading.client import Batch
 
+        now = time.time()
         with Batch(timeout=timeout) as b:
             for pvn, value in pvdict.items():
                 pv_input = self.kv[pvn]
@@ -880,7 +886,6 @@ class Accelerator:
         time.sleep(delay_after_write)
 
         t_start_rb = time.perf_counter()
-        now = time.time()
         rb_results = {}
         last_read = {}
         all_reads = {cn: [] for cn in pvdict}

@@ -199,9 +199,6 @@ class TestAcceleratorCaproto:
         data = self.acc.get_buffer_data(pv_name, start=t_start)
         assert len(data) >= 4, f"Expected >=4 buffered readings from 0.5s scan over 3s, got {len(data)}"
 
-        # get_buffer_data returns newest-first, reverse for chronological order
-        data = data[::-1]
-
         # Values should be monotonically increasing (counter)
         values = [r.data[0] for r in data]
         for i in range(1, len(values)):
@@ -213,6 +210,24 @@ class TestAcceleratorCaproto:
         for i in range(1, len(timestamps)):
             assert timestamps[i] > timestamps[i - 1], \
                 f"Timestamps not monotonic: {timestamps}"
+
+    def test_get_buffer_data_chronological_order(self):
+        """get_buffer_data must return results in chronological order (oldest first)."""
+        pv_name = _pv("COUNTER")
+        self.acc.ensure_monitored(pv_name)
+        t_start = time.time()
+        time.sleep(3.0)
+
+        data = self.acc.get_buffer_data(pv_name, start=t_start)
+        assert len(data) >= 3, f"Need >=3 readings, got {len(data)}"
+
+        timestamps = [r.metadata.timestamp for r in data]
+        for i in range(1, len(timestamps)):
+            assert timestamps[i] > timestamps[i - 1], \
+                f"get_buffer_data not chronological: {timestamps}"
+
+        # First element should be oldest, last should be newest
+        assert timestamps[0] < timestamps[-1]
 
     def test_scanning_pv_read_fresh_multiple(self):
         """Collect multiple fresh readings from a scanning PV."""
@@ -486,9 +501,6 @@ class TestAcceleratorPyepics:
         data = self.acc.get_buffer_data(pv_name, start=t_start)
         assert len(data) >= 4, f"Expected >=4 buffered readings from 0.5s scan over 3s, got {len(data)}"
 
-        # get_buffer_data returns newest-first, reverse for chronological order
-        data = data[::-1]
-
         values = [r.data[0] for r in data]
         for i in range(1, len(values)):
             assert values[i] > values[i - 1], \
@@ -498,6 +510,24 @@ class TestAcceleratorPyepics:
         for i in range(1, len(timestamps)):
             assert timestamps[i] > timestamps[i - 1], \
                 f"Timestamps not monotonic: {timestamps}"
+
+    def test_get_buffer_data_chronological_order(self):
+        """get_buffer_data must return results in chronological order (oldest first)."""
+        pv_name = _pv("COUNTER")
+        self.acc.ensure_monitored(pv_name)
+        t_start = time.time()
+        time.sleep(3.0)
+
+        data = self.acc.get_buffer_data(pv_name, start=t_start)
+        assert len(data) >= 3, f"Need >=3 readings, got {len(data)}"
+
+        timestamps = [r.metadata.timestamp for r in data]
+        for i in range(1, len(timestamps)):
+            assert timestamps[i] > timestamps[i - 1], \
+                f"get_buffer_data not chronological: {timestamps}"
+
+        # First element should be oldest, last should be newest
+        assert timestamps[0] < timestamps[-1]
 
     def test_scanning_pv_read_fresh_multiple(self):
         """Collect multiple fresh readings from a scanning PV."""
